@@ -126,7 +126,7 @@ return [
     |
     */
 
-    'cookie' => env('SESSION_COOKIE', 'al_istiqomah_sikeu_session'),
+    'cookie' => env('SESSION_COOKIE', 'al_muqoddasah_sikeu_session'),
 
     /*
     |--------------------------------------------------------------------------

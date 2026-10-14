@@ -1,10 +1,10 @@
 /**
  * Format No. VA: prefix + NIS (total 16 digit).
- * Open 797777 (VA 93). Close hanya jika APP_VA_CLOSE_ENABLED=true.
+ * Open 777723 (VA 93). Close hanya jika APP_VA_CLOSE_ENABLED=true.
  */
 (function (window) {
-    const DEFAULT_OPEN = '797777';
-    const DEFAULT_CLOSE = '797777';
+    const DEFAULT_OPEN = '777723';
+    const DEFAULT_CLOSE = '777723';
     const TOTAL_LENGTH = 16;
 
     function digitsOnly(value) {

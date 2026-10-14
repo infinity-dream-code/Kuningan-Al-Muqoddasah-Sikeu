@@ -14,7 +14,7 @@ class RestorePersistentLogin
     {
         if (Auth::check()) {
             $current = Auth::user();
-            if ($current instanceof \App\Models\CyberKey && !$request->cookie(PersistentLogin::COOKIE)) {
+            if ($current instanceof \App\Models\CyberKey && PersistentLogin::needsRefresh($request->cookie(PersistentLogin::COOKIE))) {
                 PersistentLogin::queue($current);
             }
 

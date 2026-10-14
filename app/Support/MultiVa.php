@@ -11,8 +11,8 @@ class MultiVa
 {
     public const OPEN = '93';
     public const CLOSE = '94';
-    public const OPEN_PREFIX = '797777';
-    public const CLOSE_PREFIX = '797777';
+    public const OPEN_PREFIX = '777723';
+    public const CLOSE_PREFIX = '777723';
     public const LEGACY_OPEN_PREFIXES = ['7797793', '779793', '797793'];
     public const LEGACY_CLOSE_PREFIXES = ['7797794', '779794', '797794'];
 
@@ -535,7 +535,7 @@ class MultiVa
      */
     public static function prefixFromContext(mixed $va = null, mixed $isInstallment = null, ?string $billName = null): string
     {
-        // Client open-only: semua tagihan pakai prefix Open (797777).
+        // Client open-only: semua tagihan pakai prefix Open (777723).
         if (!self::closeEnabled()) {
             return self::openPrefix();
         }

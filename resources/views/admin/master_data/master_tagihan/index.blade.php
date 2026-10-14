@@ -131,7 +131,7 @@
                             @else
                             <div class="mb-3">
                                 <label class="form-label" for="VA">VA</label>
-                                <input type="text" class="form-control" value="93 - Open (797777)" readonly disabled>
+                                <input type="text" class="form-control" value="93 - Open (777723)" readonly disabled>
                                 <input type="hidden" name="VA" id="VA" value="93">
                                 <small class="text-muted">Client ini hanya memakai VA Open.</small>
                             </div>
@@ -194,7 +194,7 @@
                             @else
                             <div class="mb-3">
                                 <label class="form-label" for="edit_VA">VA</label>
-                                <input type="text" class="form-control" value="93 - Open (797777)" readonly disabled>
+                                <input type="text" class="form-control" value="93 - Open (777723)" readonly disabled>
                                 <input type="hidden" name="VA" id="edit_VA" value="93">
                                 <small class="text-muted">Client ini hanya memakai VA Open.</small>
                             </div>

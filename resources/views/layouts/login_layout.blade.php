@@ -117,6 +117,10 @@
             cache: false,
             dataType: 'json',
             success: function (data) {
+                if (data && data.authenticated) {
+                    window.location.replace('{{ route('login') }}');
+                    return;
+                }
                 if (data && data.csrf_token) {
                     $('input[name="_token"]').val(data.csrf_token);
                 }

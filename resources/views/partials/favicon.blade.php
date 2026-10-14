@@ -1,5 +1,5 @@
 @php
-    $logoFile = config('app.logo', 'istiqomah.png');
+    $logoFile = config('app.logo', 'Muqoddasah.png');
     $logoPath = public_path($logoFile);
     $logoVersion = is_file($logoPath) ? filemtime($logoPath) : time();
     $logoUrl = asset($logoFile) . '?v=' . $logoVersion;

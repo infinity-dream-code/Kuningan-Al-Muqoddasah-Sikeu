@@ -7,7 +7,7 @@ use Illuminate\Support\Facades\Cookie;
 
 class PersistentLogin
 {
-    public const COOKIE = 'al-istiqomah-sikeu';
+    public const COOKIE = 'al-muqoddasah-sikeu';
 
     /** Legacy cookie names from previous client branding (still readable, migrated on next request). */
     public const LEGACY_COOKIES = ['aisyiyah_jatinom', 'arruhama_stay'];
@@ -67,6 +67,16 @@ class PersistentLogin
         }
 
         return null;
+    }
+
+    public static function needsRefresh(?string $raw): bool
+    {
+        $data = is_string($raw) ? json_decode($raw, true) : null;
+        if (!is_array($data)) {
+            return true;
+        }
+
+        return (int) ($data['exp'] ?? 0) < now()->addYear()->timestamp;
     }
 
     public static function userFromCookie(?string $raw): ?CyberKey
