@@ -129,6 +129,11 @@
                             </a>
                         </li>
                         @endif
+                        <li class="menu-item {{ Request::is(['admin/keuangan/saldo/debet-saldo*']) ? 'active' : '' }}">
+                            <a href="{{ route('admin.keuangan.saldo.debet-saldo.index') }}" class="menu-link">
+                                <div data-i18n="Debet Saldo">Debet Saldo</div>
+                            </a>
+                        </li>
                     </ul>
                 </li>
                 <li class="menu-item {{ Request::is(['admin/keuangan/hapus-tagihan*']) ? 'active' : '' }}">

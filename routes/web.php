@@ -219,6 +219,16 @@ Route::prefix("admin")
                     "saldo-va-close",
                     \App\Http\Controllers\Admin\Keuangan\Saldo\SaldoVaCloseController::class
                 );
+
+                Route::controller(\App\Http\Controllers\Admin\Keuangan\Saldo\DebetSaldoController::class)
+                    ->prefix("debet-saldo")->name("debet-saldo.")->group(function () {
+                        Route::get("", "index")->name("index");
+                        Route::get("siswa-search", "siswaSearch")->name("siswa-search");
+                        Route::get("siswa-detail", "siswaDetail")->name("siswa-detail");
+                        Route::post("", "store")->name("store");
+                        Route::get("get-data", "getData")->name("get-data");
+                        Route::get("get-column", "getColumn")->name("get-column");
+                    });
             });
 
             Route::prefix("hapus-tagihan")->name("hapus-tagihan.")->group(function () {
