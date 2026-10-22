@@ -192,10 +192,11 @@ class MultiVa
         }
 
         $digits = preg_replace('/\D/', '', $raw);
-        if (in_array($digits, array_merge([self::OPEN, self::openPrefix()], self::LEGACY_OPEN_PREFIXES), true)) {
+        // 1/93 = Open, 2/94 = Close (DB Muqoddasah pakai PerTagihan1 / PerTagihan2)
+        if (in_array($digits, array_merge(['1', self::OPEN, self::openPrefix()], self::LEGACY_OPEN_PREFIXES), true)) {
             return self::OPEN;
         }
-        if (in_array($digits, array_merge([self::CLOSE, self::closePrefix()], self::LEGACY_CLOSE_PREFIXES), true)) {
+        if (in_array($digits, array_merge(['2', self::CLOSE, self::closePrefix()], self::LEGACY_CLOSE_PREFIXES), true)) {
             return self::CLOSE;
         }
 
@@ -413,19 +414,30 @@ class MultiVa
             });
     }
 
+    /**
+     * Suffix function DB: PerTagihan1 (Open) / PerTagihan2 (Close).
+     * Bukan 93/94 — sesuai function di kuningan_al_muqoddasah.
+     */
+    public static function paymentSuffix(string $reffBank): string
+    {
+        return self::normalize($reffBank) === self::CLOSE ? '2' : '1';
+    }
+
+    /** REFFBANK yang dipakai function PerTagihan1/2 saat cek/debet saldo. */
+    public static function paymentReffBank(string $reffBank): string
+    {
+        return self::paymentSuffix($reffBank);
+    }
+
     public static function paymentFunction(string $reffBank): string
     {
-        $va = self::normalize($reffBank) ?? self::OPEN;
-
-        return "BuilderPaymentBill_MultiVAPerTagihan{$va}";
+        return 'BuilderPaymentBill_MultiVAPerTagihan' . self::paymentSuffix($reffBank);
     }
 
     /** Nama lama sebelum rename (salah copas _BankBayar_). */
     public static function paymentFunctionLegacy(string $reffBank): string
     {
-        $va = self::normalize($reffBank) ?? self::OPEN;
-
-        return "BuilderPaymentBill_BankBayar_MultiVAPerTagihan{$va}";
+        return 'BuilderPaymentBill_BankBayar_MultiVAPerTagihan' . self::paymentSuffix($reffBank);
     }
 
     public static function cashPaymentFunction(): string

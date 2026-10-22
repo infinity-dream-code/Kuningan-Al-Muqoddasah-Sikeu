@@ -545,7 +545,10 @@ class ManualPembayaranController extends Controller
                 || stripos($sqlMessage, '1305') !== false
                 || stripos($sqlMessage, "doesn't exist") !== false
             ) {
-                $message = 'Function pembayaran belum ada di database. Hubungi admin DB (BuilderPaymentCash / BuilderPaymentCash_MultiVAPerTagihan).';
+                $bank = (string) $request->input('bank');
+                $message = $bank === '1140002'
+                    ? 'Function pembayaran saldo belum siap (BuilderPaymentBill_MultiVAPerTagihan1 / BuilderPaymentBill). Coba deploy ulang atau hubungi ICT.'
+                    : 'Function pembayaran cash belum siap (BuilderPaymentCash). Coba deploy ulang atau hubungi ICT.';
             } elseif (config('app.debug')) {
                 $message = 'Tagihan gagal dibayar: ' . $sqlMessage;
             }

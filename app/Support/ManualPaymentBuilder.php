@@ -29,18 +29,8 @@ class ManualPaymentBuilder
 
         try {
             if ($fidBank === self::SALDO_FIDBANK) {
-                $va = MultiVa::resolveFromBill($tagihan);
-                if ($va === null) {
-                    throw new RuntimeException(
-                        'Tagihan belum memiliki VA Open/Close. Set tipe VA di Master Tagihan.'
-                    );
-                }
-                $this->callBuilderPaymentBill(
-                    $aa,
-                    $nominal,
-                    MultiVa::paymentFunction($va),
-                    MultiVa::paymentFunctionLegacy($va)
-                );
+                $va = MultiVa::resolveFromBill($tagihan) ?? MultiVa::OPEN;
+                $this->callBuilderPaymentBill($aa, $nominal, $va);
 
                 return;
             }
@@ -55,23 +45,29 @@ class ManualPaymentBuilder
                 $nominal
             );
         } catch (\Throwable $e) {
-            if ($e instanceof RuntimeException) {
+            // Insufficient_Balance dari function (REFFBANK 1/2 kosong) → coba PHP pakai saldo view.
+            $saldoInsufficient = $e instanceof RuntimeException
+                && str_contains($e->getMessage(), 'tidak mencukupi');
+
+            if ($e instanceof RuntimeException && !$saldoInsufficient) {
                 throw $e;
             }
 
-            // Function MultiVA butuh kolom VA / tabel sm_topup → fallback PHP untuk cash.
-            if ($fidBank !== self::SALDO_FIDBANK && $this->shouldPhpFallback($e)) {
-                Log::warning('manual-payment.builder.php_fallback', [
-                    'aa' => $aa,
-                    'fidbank' => $fidBank,
-                    'reason' => $e->getMessage(),
-                ]);
-                $this->payBillViaPhp($tagihan, $nominal, $fidBank, $paidAt, $transno);
-
-                return;
+            if (!$saldoInsufficient && !$this->shouldPhpFallback($e)) {
+                throw $e;
             }
 
-            throw $e;
+            Log::warning('manual-payment.builder.php_fallback', [
+                'aa' => $aa,
+                'fidbank' => $fidBank,
+                'reason' => $e->getMessage(),
+            ]);
+
+            if ($fidBank === self::SALDO_FIDBANK) {
+                $this->payBillViaSaldoPhp($tagihan, $nominal, $paidAt, $transno);
+            } else {
+                $this->payBillViaCashPhp($tagihan, $nominal, $fidBank, $paidAt, $transno);
+            }
         }
     }
 
@@ -107,80 +103,153 @@ class ManualPaymentBuilder
             'nominal' => $nominal,
         ];
 
-        $useMultiVa = MultiVa::closeEnabled() && MultiVa::billVaColumn() !== null;
-        $primary = $useMultiVa ? MultiVa::cashPaymentFunction() : 'BuilderPaymentCash';
-        $fallback = $useMultiVa ? 'BuilderPaymentCash' : null;
-
-        Log::info('manual-payment.builder.call', array_merge([
-            'function' => $primary,
-            'use_multiva' => $useMultiVa,
-        ], $context));
-
-        try {
-            $result = $this->invokeStoredFunction($primary, $params);
-            $this->assertBuilderResult($primary, $result, $context);
-        } catch (RuntimeException $e) {
-            throw $e;
-        } catch (\Throwable $e) {
-            if ($fallback === null) {
-                throw $e;
-            }
-
-            // MultiVA gagal (kolom VA / DEFINER / dll) → coba function non-MultiVA.
-            Log::warning('manual-payment.builder.fallback_legacy', [
-                'failed' => $primary,
-                'fallback' => $fallback,
-                'aa' => $aa,
-                'reason' => $e->getMessage(),
-            ]);
-            $result = $this->invokeStoredFunction($fallback, $params);
-            $this->assertBuilderResult($fallback, $result, $context);
+        $candidates = [];
+        if (MultiVa::closeEnabled() && MultiVa::billVaColumn() !== null) {
+            $candidates[] = MultiVa::cashPaymentFunction();
         }
+        $candidates[] = 'BuilderPaymentCash';
+
+        $this->invokeWithFallbacks($candidates, $params, $context);
     }
 
-    /** BuilderPaymentBill_MultiVAPerTagihan93|94 (aa, nominal) */
-    private function callBuilderPaymentBill(
-        string $aa,
-        int $nominal,
-        string $functionName = 'BuilderPaymentBill',
-        ?string $fallbackName = null
-    ): void {
-        Log::info('manual-payment.builder.call', [
-            'function' => $functionName,
-            'aa' => $aa,
-            'nominal' => $nominal,
-        ]);
+    /**
+     * Manual Saldo: DB punya BuilderPaymentBill_MultiVAPerTagihan1 / 2
+     * (bukan 93/94), lalu fallback BuilderPaymentBill.
+     */
+    private function callBuilderPaymentBill(string $aa, int $nominal, string $va): void
+    {
+        $candidates = [
+            MultiVa::paymentFunction($va),       // ...PerTagihan1 atau ...PerTagihan2
+            MultiVa::paymentFunctionLegacy($va),
+            'BuilderPaymentBill',
+        ];
 
-        try {
-            $result = $this->invokeStoredFunction($functionName, [$aa, $nominal]);
-        } catch (\Throwable $e) {
-            if ($fallbackName === null || !$this->isMissingRoutine($e, $functionName)) {
-                throw $e;
-            }
-
-            Log::info('manual-payment.builder.fallback_legacy', [
-                'missing' => $functionName,
-                'fallback' => $fallbackName,
-                'aa' => $aa,
-            ]);
-            $functionName = $fallbackName;
-            $result = $this->invokeStoredFunction($functionName, [$aa, $nominal]);
-        }
-
-        $this->assertBuilderResult($functionName, $result, [
-            'aa' => $aa,
-            'nominal' => $nominal,
-        ]);
+        $this->invokeWithFallbacks(
+            $candidates,
+            [$aa, $nominal],
+            ['aa' => $aa, 'nominal' => $nominal, 'va' => $va]
+        );
     }
 
-    /** Fallback tanpa stored function: update scctbill + insert sccttran. */
-    private function payBillViaPhp(
+    /** Coba daftar function berurutan sampai ada yang OK. */
+    private function invokeWithFallbacks(array $candidates, array $params, array $context): void
+    {
+        $candidates = array_values(array_unique(array_filter($candidates)));
+        $lastError = null;
+
+        foreach ($candidates as $index => $functionName) {
+            try {
+                Log::info('manual-payment.builder.call', array_merge([
+                    'function' => $functionName,
+                    'attempt' => $index + 1,
+                ], $context));
+
+                $result = $this->invokeStoredFunction($functionName, $params);
+                $this->assertBuilderResult($functionName, $result, $context);
+
+                return;
+            } catch (RuntimeException $e) {
+                // Hasil bisnis (saldo kurang, dll) — jangan coba function lain.
+                throw $e;
+            } catch (\Throwable $e) {
+                $lastError = $e;
+                Log::warning('manual-payment.builder.candidate_failed', [
+                    'function' => $functionName,
+                    'reason' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        throw $lastError ?? new RuntimeException('Pembayaran gagal diproses oleh sistem.');
+    }
+
+    /** Fallback Manual Cash: update scctbill + insert sccttran (net saldo 0). */
+    private function payBillViaCashPhp(
         scctbill $tagihan,
         int $nominal,
         string $fidBank,
         string $paidAt,
         ?string $transno
     ): void {
+        $meta = $this->applyBillPayment($tagihan, $nominal, $fidBank, $paidAt, $transno, 'TELLER');
+
+        DB::connection('DATA_MYSQL')->table('sccttran')->insert([
+            'CUSTID' => (int) $tagihan->CUSTID,
+            'METODE' => 'CASH',
+            'TRXDATE' => now()->format('Y-m-d H:i:s'),
+            'NOREFF' => 'MNL',
+            'FIDBANK' => $fidBank,
+            'KDCHANNEL' => '11',
+            'DEBET' => $nominal,
+            'KREDIT' => $nominal,
+            'REFFBANK' => MultiVa::OPEN,
+            'TRANSNO' => $transno ?: (string) (Auth::user()->users ?? 'TELLER'),
+            'BILLID' => (string) $tagihan->AA,
+            'BILLTARGET' => (string) ($tagihan->BILLNM ?? ''),
+            'INSTALLMENT' => (string) $meta['installment'],
+        ]);
+
+        Log::info('manual-payment.builder.php_cash_ok', [
+            'aa' => $tagihan->AA,
+            'nominal' => $nominal,
+            'fidbank' => $fidBank,
+        ]);
+    }
+
+    /**
+     * Fallback Manual Saldo: update scctbill + DEBET sccttran (mengurangi saldo).
+     * Saldo = SUM(KREDIT - DEBET).
+     */
+    private function payBillViaSaldoPhp(
+        scctbill $tagihan,
+        int $nominal,
+        string $paidAt,
+        ?string $transno
+    ): void {
+        $saldo = MultiVa::custSaldo($tagihan->CUSTID, MultiVa::OPEN);
+        if ($nominal > $saldo) {
+            throw new RuntimeException(
+                'Saldo VA siswa tidak mencukupi. Saldo: Rp. '
+                . number_format($saldo, 0, ',', '.')
+                . ', kebutuhan: Rp. ' . number_format($nominal, 0, ',', '.')
+            );
+        }
+
+        $meta = $this->applyBillPayment($tagihan, $nominal, self::SALDO_FIDBANK, $paidAt, $transno, 'MNL');
+
+        DB::connection('DATA_MYSQL')->table('sccttran')->insert([
+            'CUSTID' => (int) $tagihan->CUSTID,
+            'METODE' => 'FROM TELLER',
+            'TRXDATE' => now()->format('Y-m-d H:i:s'),
+            'NOREFF' => 'TELLER',
+            'FIDBANK' => self::SALDO_FIDBANK,
+            'KDCHANNEL' => '',
+            'DEBET' => $nominal,
+            'KREDIT' => 0,
+            // Samakan dengan function PerTagihan1 (REFFBANK='1')
+            'REFFBANK' => MultiVa::paymentReffBank(MultiVa::OPEN),
+            'TRANSNO' => $transno ?: (string) (Auth::user()->users ?? 'TELLER'),
+            'BILLID' => (string) $tagihan->AA,
+            'BILLTARGET' => (string) ($tagihan->BILLNM ?? ''),
+            'INSTALLMENT' => (string) $meta['installment'],
+        ]);
+
+        Log::info('manual-payment.builder.php_saldo_ok', [
+            'aa' => $tagihan->AA,
+            'nominal' => $nominal,
+            'saldo_sebelum' => $saldo,
+        ]);
+    }
+
+    /** @return array{installment: int, fully_paid: bool} */
+    private function applyBillPayment(
+        scctbill $tagihan,
+        int $nominal,
+        string $fidBank,
+        string $paidAt,
+        ?string $transno,
+        string $noreff
+    ): array {
         $billAm = (int) $tagihan->BILLAM;
         $billPaid = (int) ($tagihan->BILLPAID ?? 0);
         $newBillPaid = $billPaid + $nominal;
@@ -195,42 +264,20 @@ class ManualPaymentBuilder
 
         DB::connection('DATA_MYSQL')->table('scctbill')
             ->where('AA', $tagihan->AA)
+            ->where('CUSTID', $tagihan->CUSTID)
             ->update([
                 'BILLPAID' => $newBillPaid,
                 'PAYMENTLEFT' => $newPaymentLeft,
-                'PAIDDT' => $paidDt,
+                'PAIDDT' => $isFullyPaid ? $paidDt : null,
                 'PAIDDT_ACTUAL' => now()->format('Y-m-d H:i:s'),
-                'FIDBANK' => $fidBank,
-                'NOREFF' => 'TELLER',
+                'FIDBANK' => $isFullyPaid ? $fidBank : null,
+                'NOREFF' => $isFullyPaid ? $noreff : null,
                 'PAIDST' => $isFullyPaid ? 1 : 0,
                 'INSTALLMENT' => $newInstallment,
                 'TRANSNO' => $transno,
             ]);
 
-        $tran = [
-            'CUSTID' => (int) $tagihan->CUSTID,
-            'METODE' => 'FROM TELLER',
-            'TRXDATE' => now()->format('Y-m-d H:i:s'),
-            'NOREFF' => 'TELLER',
-            'FIDBANK' => $fidBank,
-            'KDCHANNEL' => '',
-            'DEBET' => $nominal,
-            'KREDIT' => $nominal,
-            'REFFBANK' => MultiVa::OPEN,
-            'TRANSNO' => $transno ?: (string) (Auth::user()->users ?? 'TELLER'),
-            'BILLID' => (string) $tagihan->AA,
-            'BILLTARGET' => (string) ($tagihan->BILLNM ?? ''),
-            'INSTALLMENT' => (string) $newInstallment,
-        ];
-
-        DB::connection('DATA_MYSQL')->table('sccttran')->insert($tran);
-
-        Log::info('manual-payment.builder.php_ok', [
-            'aa' => $tagihan->AA,
-            'nominal' => $nominal,
-            'fidbank' => $fidBank,
-            'transno' => $transno,
-        ]);
+        return ['installment' => $newInstallment, 'fully_paid' => $isFullyPaid];
     }
 
     /** MySQL FUNCTION (fx) — pakai SELECT, bukan CALL (procedure). */
@@ -290,20 +337,6 @@ class ManualPaymentBuilder
         return (string) ($user->urut ?? Auth::id() ?? '');
     }
 
-    private function isMissingRoutine(\Throwable $e, string $routine): bool
-    {
-        $message = $e->getMessage();
-
-        return stripos($message, $routine) !== false
-            && (
-                stripos($message, 'does not exist') !== false
-                || stripos($message, "doesn't exist") !== false
-                || stripos($message, 'unknown procedure') !== false
-                || stripos($message, 'unknown function') !== false
-                || stripos($message, '1305') !== false
-            );
-    }
-
     private function isMissingAnyRoutine(\Throwable $e): bool
     {
         $message = $e->getMessage();
@@ -321,7 +354,6 @@ class ManualPaymentBuilder
         );
     }
 
-    /** Error yang aman diatasi dengan bayar cash via PHP (tanpa ubah function DB). */
     private function shouldPhpFallback(\Throwable $e): bool
     {
         if ($this->isMissingAnyRoutine($e)) {
@@ -336,6 +368,6 @@ class ManualPaymentBuilder
             || str_contains($message, 'sm_topup')
             || str_contains($message, 'definer')
             || str_contains($message, 'access denied')
-            || str_contains($message, '1449'); // definer user missing
+            || str_contains($message, '1449');
     }
 }
