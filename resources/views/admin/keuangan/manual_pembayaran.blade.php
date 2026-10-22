@@ -678,7 +678,7 @@
                     } else if (xhr.status === 419) {
                         // 419 dipulihkan diam-diam oleh handler global (refresh token + retry)
                     } else if (xhr.status === 500) {
-                        errorAlert('Tidak dapat terhubung ke server, Silahkan periksa koneksi internet anda');
+                        errorAlert('Gagal memuat saldo siswa. Silahkan coba lagi.');
                     } else if (xhr.status === 403) {
                         errorAlert('Anda tidak memiliki izin untuk mengakses halaman ini');
                     } else if (xhr.status === 404) {

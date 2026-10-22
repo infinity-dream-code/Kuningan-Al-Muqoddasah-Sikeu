@@ -632,21 +632,35 @@ class SaldoVirtualAccountController extends Controller
 
     public function getSaldo(Request $request)
     {
-        $custId = $request->input('siswa');
-        $open = MultiVa::custSaldo($custId, MultiVa::OPEN);
-        $payload = [
-            'saldo' => $open,
-            'saldo_open' => $open,
-            'saldo_93' => $open,
-        ];
+        try {
+            $custId = $request->input('siswa');
+            $open = MultiVa::custSaldo($custId, MultiVa::OPEN);
+            $payload = [
+                'saldo' => $open,
+                'saldo_open' => $open,
+                'saldo_93' => $open,
+            ];
 
-        if (MultiVa::closeEnabled()) {
-            $close = MultiVa::custSaldo($custId, MultiVa::CLOSE);
-            $payload['saldo_close'] = $close;
-            $payload['saldo_94'] = $close;
+            if (MultiVa::closeEnabled()) {
+                $close = MultiVa::custSaldo($custId, MultiVa::CLOSE);
+                $payload['saldo_close'] = $close;
+                $payload['saldo_94'] = $close;
+            }
+
+            return response()->json($payload);
+        } catch (\Throwable $e) {
+            Log::error('getSaldo failed', [
+                'siswa' => $request->input('siswa'),
+                'message' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'saldo' => 0,
+                'saldo_open' => 0,
+                'saldo_93' => 0,
+                'message' => 'Saldo tidak dapat dimuat.',
+            ]);
         }
-
-        return response()->json($payload);
     }
 
     public function transaksiIndex()

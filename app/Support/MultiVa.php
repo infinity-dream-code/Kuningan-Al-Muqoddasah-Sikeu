@@ -319,12 +319,19 @@ class MultiVa
         return null;
     }
 
-    /** View saldo: v_saldo_va (open-only) / multiVA 93-94 / multiVA 1-2 / fallback. */
+    /**
+     * Query saldo siswa.
+     * Open-only: hitung dari sccttran (jangan pakai v_saldo_va — view server sering 500
+     * karena GROUP BY / DEFINER; view tidak diubah, app yang adapt).
+     */
     public static function saldoQuery(string $reffBank)
     {
+        if (!self::closeEnabled()) {
+            return self::fallbackSaldoQuery();
+        }
+
         $view = self::resolveExistingView([
             self::saldoView($reffBank),
-            'v_saldo_va',
             'v_saldo_va_multivapertagihan93',
             'v_saldo_va_multivapertagihan1',
             'v_saldo_va_multivapertagihan94',
@@ -489,11 +496,24 @@ class MultiVa
             return 0;
         }
 
-        $row = self::saldoQuery($reffBank)
-            ->where('CUSTID', $custId)
-            ->first();
+        try {
+            $row = self::saldoQuery($reffBank)
+                ->where('CUSTID', $custId)
+                ->first();
 
-        return (int) ($row->SALDO ?? 0);
+            return (int) ($row->SALDO ?? 0);
+        } catch (\Throwable $e) {
+            // View saldo rusak / tidak cocok schema → hitung dari sccttran.
+            try {
+                $row = self::fallbackSaldoQuery()
+                    ->where('scctcust.CUSTID', $custId)
+                    ->first();
+
+                return (int) ($row->SALDO ?? 0);
+            } catch (\Throwable $fallbackError) {
+                return 0;
+            }
+        }
     }
 
     public static function masters(): \Illuminate\Support\Collection
