@@ -538,7 +538,19 @@ class ManualPembayaranController extends Controller
                 'error' => $e->getMessage(),
                 'code' => $e->getCode(),
             ]);
-            return response()->json(['message' => 'Tagihan gagal dibayar', 'error' => $e], 422);
+            $sqlMessage = $e->getMessage();
+            $message = 'Tagihan gagal dibayar';
+            if (
+                stripos($sqlMessage, 'BuilderPayment') !== false
+                || stripos($sqlMessage, '1305') !== false
+                || stripos($sqlMessage, "doesn't exist") !== false
+            ) {
+                $message = 'Function pembayaran belum ada di database. Hubungi admin DB (BuilderPaymentCash / BuilderPaymentCash_MultiVAPerTagihan).';
+            } elseif (config('app.debug')) {
+                $message = 'Tagihan gagal dibayar: ' . $sqlMessage;
+            }
+
+            return response()->json(['message' => $message], 422);
         } catch (Throwable $e) {
             $this->rollbackManualPaymentTransactions();
             Log::error('manual-pembayaran.store.unhandled_exception', [
@@ -547,9 +559,14 @@ class ManualPembayaranController extends Controller
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ]);
-            return response()->json([
-                'message' => config('app.debug') ? ('Tagihan gagal dibayar: ' . $e->getMessage()) : 'Tagihan gagal dibayar'
-            ], 422);
+            // RuntimeException dari builder sudah pesan user-friendly — tampilkan apa adanya.
+            $message = $e instanceof \RuntimeException
+                ? $e->getMessage()
+                : (config('app.debug')
+                    ? ('Tagihan gagal dibayar: ' . $e->getMessage())
+                    : 'Tagihan gagal dibayar');
+
+            return response()->json(['message' => $message], 422);
         }
     }
 
