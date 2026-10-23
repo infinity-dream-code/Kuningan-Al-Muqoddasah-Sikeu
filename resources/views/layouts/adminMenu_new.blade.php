@@ -143,7 +143,19 @@
                 </li>
             </ul>
         </li>
-        {{-- Manual Input / Pengumuman / Wakaf / Rekap Data: disembunyikan untuk client ini --}}
+        <li class="menu-item {{ Request::is(['admin/manual-input*']) ? 'active open' : '' }}">
+            <a href="javascript:void(0);" class="menu-link menu-toggle">
+                <i class="menu-icon ri ri-edit-2-line"></i>
+                <div data-i18n="Manual Input">Manual Input</div>
+            </a>
+            <ul class="menu-sub">
+                <li class="menu-item {{ Request::is(['admin/manual-input/edit-manual*']) ? 'active' : '' }}">
+                    <a href="{{ route('admin.manual-input.edit-manual.index') }}" class="menu-link">
+                        <div data-i18n="Edit Manual">Edit Manual</div>
+                    </a>
+                </li>
+            </ul>
+        </li>
 
         <li class="menu-item mt-auto pb-2">
             <a href="{{route('logout')}}" class="menu-link btn-danger text-white"  onclick="event.preventDefault();
