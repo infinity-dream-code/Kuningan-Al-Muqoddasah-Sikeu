@@ -9,7 +9,7 @@ use Illuminate\Support\Facades\DB;
 /**
  * Scope sekolah dari cyber_key.fid (= scctcust.CODE01).
  * fid kosong = akses semua sekolah.
- * Scope gender dari cyber_key.kel (L/P). kel kosong = lihat semua gender.
+ * Scope gender dari cyber_key.gender (L/P). gender kosong = lihat semua gender.
  */
 class SchoolScope
 {
@@ -37,7 +37,7 @@ class SchoolScope
         return $code !== null ? [$code] : [];
     }
 
-    /** L atau P dari cyber_key.kel; null jika tidak dibatasi. */
+    /** L atau P dari cyber_key.gender; null jika tidak dibatasi. */
     public static function genderFromUser(mixed $user = null): ?string
     {
         $user ??= Auth::user();
@@ -45,7 +45,7 @@ class SchoolScope
             return null;
         }
 
-        return self::parseGender($user->kel ?? null);
+        return self::parseGender($user->gender ?? null);
     }
 
     /**

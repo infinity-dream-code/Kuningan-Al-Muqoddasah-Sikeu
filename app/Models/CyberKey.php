@@ -24,6 +24,7 @@ class CyberKey extends Model implements AuthenticatableContract
         "fid",
         "ket",
         "kel",
+        "gender",
         "urut",
         "password",
     ];
