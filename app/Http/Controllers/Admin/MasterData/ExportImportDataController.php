@@ -442,6 +442,7 @@ class ExportImportDataController extends Controller
         $item['nodaftar'] = isset($item['nodaftar']) && $item['nodaftar'] !== '' && $item['nodaftar'] !== null
             ? (string) $item['nodaftar']
             : null;
+        $item['gender'] = SchoolScope::parseGender($item['gender'] ?? $item['jenis_kelamin'] ?? $item['jk'] ?? null);
 
         return $item;
     }
@@ -514,7 +515,7 @@ class ExportImportDataController extends Controller
             'DESC02' => $kelas->jenjang,
             'CODE03' => $kelas->id,
             'DESC03' => $kelas->kelas,
-            'CODE04' => $item['gender'] ?? null,
+            'CODE04' => SchoolScope::parseGender($item['gender'] ?? null),
             'DESC04' => $thn_aka->thn_aka,
             'DESC05' => $item['alamat'] ?? null,
             'GENUS' => $this->resolveOrtuForDb($item),

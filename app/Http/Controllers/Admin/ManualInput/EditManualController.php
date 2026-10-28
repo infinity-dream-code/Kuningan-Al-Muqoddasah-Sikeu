@@ -10,6 +10,7 @@ use App\Models\scctbill;
 use App\Models\scctcust;
 use App\Models\ValidationMessage;
 use App\Support\MultiVa;
+use App\Support\SchoolScope;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -50,6 +51,7 @@ class EditManualController extends Controller
                 ->where('CUSTID', $request->custid)
                 ->where('STCUST', 1)
                 ->when($unitScope, fn ($q) => $q->where('CODE01', $unitScope))
+                ->tap(fn ($q) => SchoolScope::applyGender($q, 'scctcust.CODE04'))
                 ->first();
 
             if (!$siswa) {
@@ -74,6 +76,7 @@ class EditManualController extends Controller
         $siswa = scctcust::query()
             ->where('STCUST', 1)
             ->when($unitScope, fn ($q) => $q->where('CODE01', $unitScope))
+            ->tap(fn ($q) => SchoolScope::applyGender($q, 'scctcust.CODE04'))
             ->when($nis, function ($q) use ($nis) {
                 $q->where(function ($q2) use ($nis) {
                     $q2->where('nocust', 'like', $nis)
@@ -192,7 +195,7 @@ class EditManualController extends Controller
         }
 
         $billPaid = (int) ($tagihan->BILLPAID ?? 0);
-        if ($billPaid > 0 || (int) ($tagihan->isINSTALLABLE ?? 0) > 0) {
+        if ($billPaid > 0 || (int) ($tagihan->INSTALLMENT ?? 0) > 0) {
             return response()->json(['message' => 'Tagihan yang sudah pernah dibayar (cicilan) tidak bisa diedit di sini!'], 422);
         }
 

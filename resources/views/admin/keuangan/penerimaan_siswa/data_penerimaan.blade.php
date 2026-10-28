@@ -1472,7 +1472,7 @@
 
             document.getElementById('cetak-kuitansi').addEventListener('click', async function (e) {
                 e.preventDefault();
-                await generateKuitansi();
+                await generateKuitansi(true);
             });
 
             document.getElementById('cetak-kartu-siswa').addEventListener('click', async function (e) {

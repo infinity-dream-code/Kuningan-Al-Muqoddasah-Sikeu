@@ -350,6 +350,10 @@ class MultiVa
     /** View transaksi saldo: v_trans_saldo (open-only) / multiVA / fallback. */
     public static function transQuery(string $reffBank)
     {
+        if (!self::closeEnabled()) {
+            return self::fallbackTransQuery();
+        }
+
         $view = self::resolveExistingView([
             self::transView($reffBank),
             'v_trans_saldo',
@@ -406,12 +410,30 @@ class MultiVa
     public static function fallbackTransQuery()
     {
         return DB::connection('DATA_MYSQL')
-            ->table('sccttran')
+            ->table('sccttran as trx')
+            ->leftJoin('scctcust as c', 'c.CUSTID', '=', 'trx.CUSTID')
             ->where(function ($q) {
-                $q->whereNull('FIDBANK')
-                    ->orWhereRaw("TRIM(COALESCE(CAST(FIDBANK AS CHAR), '')) = ''")
-                    ->orWhereRaw("TRIM(COALESCE(CAST(FIDBANK AS CHAR), '')) != ?", ['1140000']);
-            });
+                $q->whereNull('trx.FIDBANK')
+                    ->orWhereRaw("TRIM(COALESCE(CAST(trx.FIDBANK AS CHAR), '')) = ''")
+                    ->orWhereRaw("TRIM(COALESCE(CAST(trx.FIDBANK AS CHAR), '')) != ?", ['1140000']);
+            })
+            ->select([
+                'trx.urut as urut',
+                'trx.CUSTID as CUSTID',
+                'trx.TRXDATE as TRXDATE',
+                DB::raw('COALESCE(trx.METODE, trx.NOREFF, "") as KETERANGAN'),
+                DB::raw('COALESCE(trx.METODE, trx.NOREFF, "") as METODE'),
+                'trx.DEBET as DEBET',
+                'trx.KREDIT as KREDIT',
+                'c.NOCUST as NOCUST',
+                'c.NUM2ND as NUM2ND',
+                'trx.NOREFF as NOREFF',
+                'c.NMCUST as NMCUST',
+                'c.CODE01 as CODE01',
+                'c.CODE02 as CODE02',
+                'c.DESC02 as DESC02',
+                'c.DESC03 as DESC03',
+            ]);
     }
 
     /**
@@ -446,6 +468,11 @@ class MultiVa
     }
 
     public static function cancelProcedure(string $reffBank): string
+    {
+        return 'CancelPaymentSaldo_MultiVAPerTagihan' . self::paymentSuffix($reffBank);
+    }
+
+    public static function cancelProcedureUnsuffixed(): string
     {
         return 'CancelPaymentSaldo_MultiVAPerTagihan';
     }

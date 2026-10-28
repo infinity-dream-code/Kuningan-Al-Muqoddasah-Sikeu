@@ -222,9 +222,12 @@
                                        id="edit_siswa-desc04" name="angkatan">
                             </div>
                             <div class="col-md-4">
-                                <label class="form-label">Jenis Kelamin / Gender</label>
-                                <input type="text" class="form-control form-control-sm"
-                                       id="edit_siswa-code04" name="gender">
+                                <label class="form-label required">Jenis Kelamin / Gender</label>
+                                <select class="form-select form-select-sm" id="edit_siswa-code04" name="gender" required>
+                                    <option value="">Pilih</option>
+                                    <option value="L">Laki-laki</option>
+                                    <option value="P">Perempuan</option>
+                                </select>
                             </div>
                             <div class="col-md-4">
                                 <label class="form-label">Orang Tua</label>
@@ -615,6 +618,17 @@
         }
 
 
+        function normalizeGender(value) {
+            const raw = String(value ?? '').toUpperCase().replace(/[\s\-_]/g, '');
+            if (['L', '1', 'LAKI', 'LAKILAKI', 'MALE', 'PRIA', 'COWOK'].includes(raw)) {
+                return 'L';
+            }
+            if (['P', '0', 'PEREMPUAN', 'WANITA', 'FEMALE', 'CEWEK'].includes(raw)) {
+                return 'P';
+            }
+            return '';
+        }
+
         function fillFormValue(id, rowEl) {
             const rowData = DT[`${dtOptions.tableId}`].row(rowEl).data();
             Object.entries(rowData).forEach(([key, value]) => {
@@ -652,7 +666,7 @@
                 setValue('#form-edit-siswa [name="kelas"]', pickValue(rowData.desc02, rowData.DESC02));
                 setValue('#form-edit-siswa [name="kelompok"]', pickValue(rowData.desc03, rowData.DESC03));
                 setValue('#form-edit-siswa [name="angkatan"]', pickValue(rowData.angkatan, rowData.desc04, rowData.DESC04));
-                setValue('#form-edit-siswa [name="gender"]', pickValue(rowData.gender, rowData.code04, rowData.CODE04));
+                setValue('#form-edit-siswa [name="gender"]', normalizeGender(pickValue(rowData.gender, rowData.code04, rowData.CODE04)));
                 setValue('#form-edit-siswa [name="alamat"]', pickValue(rowData.alamat, rowData.desc05, rowData.DESC05));
                 setValue('#form-edit-siswa [name="item_id"]', rowData.item_id ?? '');
             }

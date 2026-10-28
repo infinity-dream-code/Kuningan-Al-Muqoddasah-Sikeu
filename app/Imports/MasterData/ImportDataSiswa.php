@@ -5,6 +5,7 @@ namespace App\Imports\MasterData;
 use App\Models\mst_kelas;
 use App\Models\mst_thn_aka;
 use App\Models\scctcust;
+use App\Support\SchoolScope;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Maatwebsite\Excel\Concerns\SkipsEmptyRows;
@@ -48,6 +49,9 @@ class ImportDataSiswa implements WithMultipleSheets, ToCollection, WithHeadingRo
             $rowData['nis'] = $nis !== '' ? $nis : null;
             $rowData['nodaftar'] = $nodaftar !== '' ? $nodaftar : null;
             $rowData['ortu'] = trim((string) ($rowData['ortu'] ?? $rowData['genus'] ?? $rowData['ayah'] ?? '')) ?: null;
+            $rowData['gender'] = SchoolScope::parseGender(
+                $rowData['gender'] ?? $rowData['jenis_kelamin'] ?? $rowData['jk'] ?? null
+            );
 
             $parsedRows[] = $rowData;
         }
@@ -131,6 +135,14 @@ class ImportDataSiswa implements WithMultipleSheets, ToCollection, WithHeadingRo
                         $rowData['kelas'],
                         $rowData['kelompok'],
                     )
+                );
+            }
+
+            if (empty($rowData['gender'])) {
+                $rowData['status'] = 0;
+                $status_ket = $this->appendKet(
+                    $status_ket,
+                    'Gender wajib diisi (L/P atau Laki-laki/Perempuan)'
                 );
             }
 

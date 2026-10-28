@@ -226,6 +226,7 @@ class DataSiswaController extends Controller
         ];
 
         $baseQuery = scctcust::query()
+            ->tap(fn ($q) => SchoolScope::applyGender($q, 'scctcust.CODE04'))
             ->when(!empty($filters), function ($q) use ($filters) {
                 foreach ($filters as $f) {
                     $q->where($f[0], $f[1], $f[2]);
@@ -269,7 +270,8 @@ class DataSiswaController extends Controller
                 $row["no_pendaftaran"] = $item->NUM2ND;
                 $row["nama"] = $item->nmcust;
                 $row["angkatan"] = $item->DESC04;
-                $row["gender"] = $item->CODE04;
+                $row["gender"] = SchoolScope::parseGender($item->CODE04) ?? '';
+                $row["CODE04"] = SchoolScope::genderLabel($item->CODE04);
                 $row["alamat"] = $item->DESC05;
                 $row["ayah"] = $item->GENUS;
                 $row["no_wa"] = $item->NO_WA;
@@ -520,7 +522,7 @@ class DataSiswaController extends Controller
             [
                 "ayah" => ["nullable", "string", "max:255"],
                 "alamat" => ["nullable", "string", "max:255"],
-                "gender" => ["nullable", "string", "max:50"],
+                "gender" => ["required", "in:L,P"],
                 "no_wa" => ["nullable", "string", "max:50"],
                 "stcust" => ["nullable", "in:0,1"],
             ],
@@ -539,7 +541,7 @@ class DataSiswaController extends Controller
             ->where("CUSTID", $id)
             ->first();
 
-        if (!$siswa) {
+        if (!$siswa || !SchoolScope::studentAccessible($siswa)) {
             return response()->json(["message" => "Siswa tidak ditemukan!"], 422);
         }
 
@@ -547,7 +549,7 @@ class DataSiswaController extends Controller
             DB::beginTransaction();
             $payload = [
                 "GENUS" => $request->input("ayah") ?: null,
-                "CODE04" => $request->input("gender") ?: null,
+                "CODE04" => SchoolScope::parseGender($request->input("gender")) ?: $request->input("gender"),
                 "DESC05" => $request->input("alamat") ?: null,
                 "NO_WA" => $request->input("no_wa") ?: null,
                 "STCUST" => $request->filled("stcust")

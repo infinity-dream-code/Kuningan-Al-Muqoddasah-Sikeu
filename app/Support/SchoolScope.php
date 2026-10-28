@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\DB;
 /**
  * Scope sekolah dari cyber_key.fid (= scctcust.CODE01).
  * fid kosong = akses semua sekolah.
+ * Scope gender dari cyber_key.kel (L/P). kel kosong = lihat semua gender.
  */
 class SchoolScope
 {
@@ -36,14 +37,76 @@ class SchoolScope
         return $code !== null ? [$code] : [];
     }
 
-    public static function apply($query, string $table = 'scctcust', ?string $code = null): void
+    /** L atau P dari cyber_key.kel; null jika tidak dibatasi. */
+    public static function genderFromUser(mixed $user = null): ?string
     {
-        $code ??= self::codeFromUser();
-        if (blank($code)) {
+        $user ??= Auth::user();
+        if (!$user) {
+            return null;
+        }
+
+        return self::parseGender($user->kel ?? null);
+    }
+
+    /**
+     * Normalisasi gender ke L / P.
+     * Menerima L, P, 1/0, Laki-laki, Perempuan, dll.
+     */
+    public static function parseGender(mixed $value): ?string
+    {
+        $raw = strtoupper(trim((string) $value));
+        if ($raw === '') {
+            return null;
+        }
+
+        $normalized = preg_replace('/[\s\-_]+/', '', $raw) ?? $raw;
+
+        if (in_array($normalized, ['L', '1', 'LAKI', 'LAKILAKI', 'MALE', 'PRIA', 'COWOK'], true)) {
+            return 'L';
+        }
+        if (in_array($normalized, ['P', '0', 'PEREMPUAN', 'WANITA', 'FEMALE', 'CEWEK'], true)) {
+            return 'P';
+        }
+
+        return null;
+    }
+
+    public static function genderLabel(?string $gender): string
+    {
+        return match (self::parseGender($gender)) {
+            'L' => 'Laki-laki',
+            'P' => 'Perempuan',
+            default => trim((string) $gender),
+        };
+    }
+
+    /** @return list<string> */
+    public static function genderMatchValues(string $gender): array
+    {
+        return $gender === 'P'
+            ? ['P', '0', 'PEREMPUAN', 'WANITA', 'FEMALE', 'CEWEK']
+            : ['L', '1', 'LAKI', 'LAKILAKI', 'MALE', 'PRIA', 'COWOK'];
+    }
+
+    public static function applyGender($query, string $column = 'scctcust.CODE04'): void
+    {
+        $gender = self::genderFromUser();
+        if ($gender === null) {
             return;
         }
 
-        $query->where($table . '.CODE01', $code);
+        $normalized = "UPPER(REPLACE(REPLACE(TRIM(COALESCE({$column}, '')), '-', ''), ' ', ''))";
+        $query->whereIn(DB::raw($normalized), self::genderMatchValues($gender));
+    }
+
+    public static function apply($query, string $table = 'scctcust', ?string $code = null): void
+    {
+        $code ??= self::codeFromUser();
+        if (!blank($code)) {
+            $query->where($table . '.CODE01', $code);
+        }
+
+        self::applyGender($query, $table . '.CODE04');
     }
 
     /**
@@ -66,47 +129,54 @@ class SchoolScope
     public static function applyStudent($query, string $table = 'scctcust', ?string $code = null): void
     {
         $code ??= self::codeFromUser();
-        if (blank($code)) {
-            return;
+        if (!blank($code)) {
+            $query->where($table . '.CODE01', $code)
+                ->where(function ($scoped) use ($table, $code) {
+                    $scoped->whereNull($table . '.CODE03')
+                        ->orWhereExists(function ($exists) use ($table, $code) {
+                            $exists->select(DB::raw(1))
+                                ->from('mst_kelas')
+                                ->whereColumn('mst_kelas.id', $table . '.CODE03')
+                                ->where('mst_kelas.kelompok', $code);
+                        });
+                });
         }
 
-        $query->where($table . '.CODE01', $code)
-            ->where(function ($scoped) use ($table, $code) {
-                $scoped->whereNull($table . '.CODE03')
-                    ->orWhereExists(function ($exists) use ($table, $code) {
-                        $exists->select(DB::raw(1))
-                            ->from('mst_kelas')
-                            ->whereColumn('mst_kelas.id', $table . '.CODE03')
-                            ->where('mst_kelas.kelompok', $code);
-                    });
-            });
+        self::applyGender($query, $table . '.CODE04');
     }
 
     public static function studentAccessible(?scctcust $siswa, ?string $code = null): bool
     {
         $code ??= self::codeFromUser();
-        if (blank($code)) {
-            return true;
-        }
+        $gender = self::genderFromUser();
 
         if (!$siswa) {
-            return false;
+            return blank($code) && $gender === null;
         }
 
-        if (trim((string) ($siswa->CODE01 ?? '')) !== $code) {
-            return false;
+        if (!blank($code)) {
+            if (trim((string) ($siswa->CODE01 ?? '')) !== $code) {
+                return false;
+            }
+
+            $kelasId = trim((string) ($siswa->CODE03 ?? ''));
+            if ($kelasId !== '') {
+                $kelasOk = DB::connection('DATA_MYSQL')
+                    ->table('mst_kelas')
+                    ->where('id', $kelasId)
+                    ->where('kelompok', $code)
+                    ->exists();
+                if (!$kelasOk) {
+                    return false;
+                }
+            }
         }
 
-        $kelasId = trim((string) ($siswa->CODE03 ?? ''));
-        if ($kelasId === '') {
-            return true;
+        if ($gender !== null) {
+            return self::parseGender($siswa->CODE04) === $gender;
         }
 
-        return DB::connection('DATA_MYSQL')
-            ->table('mst_kelas')
-            ->where('id', $kelasId)
-            ->where('kelompok', $code)
-            ->exists();
+        return true;
     }
 
     public static function denyStudentMessage(?scctcust $siswa, string $label = 'Siswa'): ?string
@@ -116,7 +186,9 @@ class SchoolScope
         }
 
         $authCode = self::codeFromUser();
+        $authGender = self::genderFromUser();
+        $suffix = $authGender ? ', gender admin: ' . $authGender : '';
 
-        return "{$label} bukan dari unit Anda (CODE01: " . ($siswa->CODE01 ?? '-') . ', kelas: ' . ($siswa->CODE03 ?? '-') . ', unit admin: ' . ($authCode ?? '-') . ')';
+        return "{$label} bukan dari unit Anda (CODE01: " . ($siswa->CODE01 ?? '-') . ', kelas: ' . ($siswa->CODE03 ?? '-') . ', unit admin: ' . ($authCode ?? '-') . $suffix . ')';
     }
 }

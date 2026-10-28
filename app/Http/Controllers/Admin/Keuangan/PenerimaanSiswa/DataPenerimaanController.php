@@ -17,6 +17,7 @@ use App\Support\CacheHandler;
 use App\Support\FilterHandler;
 use App\Support\MetodeBayarHelper;
 use App\Support\MultiVa;
+use App\Support\SchoolScope;
 use App\Support\TagihanPaymentReversal;
 use Auth;
 use Barryvdh\DomPDF\Facade\Pdf;
@@ -597,10 +598,13 @@ class DataPenerimaanController extends Controller
 
     private function lunasBillBaseQuery()
     {
-        return scctbill::query()
+        $query = scctbill::query()
             ->leftJoin('scctcust', 'scctcust.CUSTID', '=', 'scctbill.CUSTID')
             ->whereIn('scctbill.PAIDST', [1, '1'])
             ->where('scctbill.FSTSBolehBayar', 1);
+        SchoolScope::applyGender($query, 'scctcust.CODE04');
+
+        return $query;
     }
 
     private function resolveOrderColumn(string $column): string

@@ -196,74 +196,7 @@ class DataTagihanController extends Controller
                 'exportable' => false,
                 'duplicate' => false,
             ],
-            [
-                'data' => 'kirim_wa',
-                'name' => 'Kirim WA',
-                'orderable' => false,
-                'dataVal' => false,
-                'columnType' => 'button',
-                'className' => 'text-center exclude-selection',
-                'excludeFromSelection' => true,
-                'button' => 'action',
-                'buttonText' => 'Kirim WA',
-                'buttonClass' => 'btn btn-sm btn-success btn-kirim-wa',
-                'buttonIcon' => 'ri-whatsapp-line me-2',
-                'exportable' => false,
-                'duplicate' => false,
-            ],
         ];
-    }
-
-    private function normalizeWaNumber(?string $raw): ?string
-    {
-        $digits = preg_replace('/\D/', '', (string) $raw);
-        if ($digits === '') {
-            return null;
-        }
-        if (str_starts_with($digits, '0')) {
-            $digits = '62' . substr($digits, 1);
-        } elseif (str_starts_with($digits, '8')) {
-            $digits = '62' . $digits;
-        }
-
-        return strlen($digits) >= 10 ? $digits : null;
-    }
-
-    private function buildWaMessage(array $bill): string
-    {
-        $sisa = (int) ($bill['PAYMENTLEFT'] ?? 0);
-        $jumlah = $sisa > 0 ? $sisa : (int) ($bill['BILLAM'] ?? 0);
-
-        $lines = [
-            'Yth. Orang Tua/Wali ' . trim((string) ($bill['NMCUST'] ?? '')),
-            '',
-            'Tagihan ' . trim((string) ($bill['BILLNM'] ?? '')),
-            'No. Tagihan: ' . trim((string) ($bill['BILLCD'] ?: $bill['AA'] ?? '-')),
-            'Periode: ' . trim((string) ($bill['BILLAC'] ?? '-')),
-            'Jumlah: Rp ' . number_format($jumlah, 0, ',', '.'),
-        ];
-
-        if (!blank($bill['FTGLTagihan'] ?? null)) {
-            try {
-                $lines[] = 'Jatuh Tempo: ' . Carbon::parse($bill['FTGLTagihan'])->format('d/m/Y');
-            } catch (\Throwable) {
-                // tanggal tidak valid → baris jatuh tempo dilewati
-            }
-        }
-
-        $lines[] = '';
-        $lines[] = 'Mohon untuk segera melakukan pembayaran.';
-        $lines[] = 'Terima kasih.';
-
-        return implode("\n", $lines);
-    }
-
-    private function buildWaUrl(array $bill): string
-    {
-        $number = $this->normalizeWaNumber($bill['NO_WA'] ?? null);
-        $text = rawurlencode($this->buildWaMessage($bill));
-
-        return 'https://wa.me/' . ($number ?? '') . '?text=' . $text;
     }
 
     public function index()
@@ -872,18 +805,6 @@ class DataTagihanController extends Controller
                     'delete_label' => 'Reversal',
                     'hapus' => $canHapus,
                     'NO_WA' => $get('NO_WA'),
-                    'kirim_wa' => true,
-                    'WA_URL' => $this->buildWaUrl([
-                        'NMCUST' => $get('NMCUST'),
-                        'BILLNM' => $get('BILLNM'),
-                        'BILLCD' => $get('BILLCD'),
-                        'AA' => $get('AA'),
-                        'BILLAC' => $get('BILLAC'),
-                        'BILLAM' => $get('BILLAM'),
-                        'PAYMENTLEFT' => $get('PAYMENTLEFT'),
-                        'FTGLTagihan' => $get('FTGLTagihan'),
-                        'NO_WA' => $get('NO_WA'),
-                    ]),
                 ];
             })
             ->values()

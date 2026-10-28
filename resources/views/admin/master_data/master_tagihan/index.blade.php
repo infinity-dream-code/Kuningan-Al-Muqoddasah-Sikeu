@@ -128,13 +128,6 @@
                                 </select>
                                 <div class="invalid-feedback" role="alert"><strong></strong></div>
                             </div>
-                            @else
-                            <div class="mb-3">
-                                <label class="form-label" for="VA">VA</label>
-                                <input type="text" class="form-control" value="93 - Open (777723)" readonly disabled>
-                                <input type="hidden" name="VA" id="VA" value="93">
-                                <small class="text-muted">Client ini hanya memakai VA Open.</small>
-                            </div>
                             @endif
                             <div class="mb-3">
                                 <label class="form-label required" for="isINSTALLMENT">Status Cicil</label>
@@ -191,13 +184,6 @@
                                 </select>
                                 <div class="invalid-feedback" role="alert"><strong></strong></div>
                             </div>
-                            @else
-                            <div class="mb-3">
-                                <label class="form-label" for="edit_VA">VA</label>
-                                <input type="text" class="form-control" value="93 - Open (777723)" readonly disabled>
-                                <input type="hidden" name="VA" id="edit_VA" value="93">
-                                <small class="text-muted">Client ini hanya memakai VA Open.</small>
-                            </div>
                             @endif
                             <div class="mb-3">
                                 <label class="form-label required" for="edit_isINSTALLMENT">Status Cicil</label>
@@ -240,14 +226,16 @@
                 const rowData = DT[`${dtOptions.tableId}`].row(rowEl).data();
                 document.getElementById('edit_tagihan').value = rowData.tagihan || '';
                 document.getElementById('edit_id').value = rowData.item_id || '';
-                const vaValue = String(rowData.VA ?? '').trim();
                 const $editVa = $('#edit_VA');
-                if (vaValue && $editVa.find('option').filter(function () {
-                    return String($(this).val()) === vaValue;
-                }).length === 0) {
-                    $editVa.append(new Option(vaValue, vaValue, true, true));
+                if ($editVa.length) {
+                    const vaValue = String(rowData.VA ?? '').trim();
+                    if (vaValue && $editVa.find('option').filter(function () {
+                        return String($(this).val()) === vaValue;
+                    }).length === 0) {
+                        $editVa.append(new Option(vaValue, vaValue, true, true));
+                    }
+                    $editVa.val(vaValue || '').trigger('change');
                 }
-                $editVa.val(vaValue || '').trigger('change');
                 $('#edit_isINSTALLMENT').val(String(Number(rowData.isINSTALLMENT ?? 0) === 1 ? 1 : 0)).trigger('change');
                 modalEdit.show();
             });
@@ -286,7 +274,9 @@
                         .then(data => {
                             document.getElementById(form.id).reset();
                             if (isEdit) {
-                                $('#edit_VA').val('93').trigger('change');
+                                if ($('#edit_VA').length) {
+                                    $('#edit_VA').val('93').trigger('change');
+                                }
                                 $('#edit_isINSTALLMENT').val('1').trigger('change');
                             }
                             successAlert(data.message);

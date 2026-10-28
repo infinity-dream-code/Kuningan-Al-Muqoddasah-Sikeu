@@ -50,9 +50,13 @@
                                 <label class="form-label">Nama</label>
                                 <input type="text" class="form-control" id="namaBox" readonly>
                             </div>
-                            <div class="col-md-6">
+                            <div class="col-md-3">
                                 <label class="form-label">Kelas</label>
                                 <input type="text" class="form-control" id="kelasBox" readonly>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Kelompok</label>
+                                <input type="text" class="form-control" id="kelompokBox" readonly>
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label">Sisa Saldo</label>
@@ -102,10 +106,11 @@
                             <th>No Transaksi</th>
                             <th class="text-end">Nominal</th>
                             <th>Teller</th>
+                            <th>Keterangan</th>
                         </tr>
                         </thead>
                         <tbody id="riwayatBody">
-                        <tr><td colspan="4" class="text-center text-muted py-3">Pilih siswa terlebih dahulu.</td></tr>
+                        <tr><td colspan="5" class="text-center text-muted py-3">Pilih siswa terlebih dahulu.</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -176,7 +181,7 @@
             function renderRiwayat(rows) {
                 const $body = $('#riwayatBody');
                 if (!rows || rows.length === 0) {
-                    $body.html('<tr><td colspan="4" class="text-center text-muted py-3">Belum ada debet saldo.</td></tr>');
+                    $body.html('<tr><td colspan="5" class="text-center text-muted py-3">Belum ada debet saldo.</td></tr>');
                     return;
                 }
                 $body.html(rows.map(row => `
@@ -185,6 +190,7 @@
                         <td>${escapeHtml(row.transno)}</td>
                         <td class="text-end">${rupiah(row.nominal)}</td>
                         <td>${escapeHtml(row.teller)}</td>
+                        <td>${escapeHtml(row.keterangan || '-')}</td>
                     </tr>`).join(''));
             }
 
@@ -196,11 +202,11 @@
             function resetForm() {
                 $('#custid').val('');
                 $search.val('');
-                $('#nisBox, #namaBox, #kelasBox, #keteranganInput').val('');
+                $('#nisBox, #namaBox, #kelasBox, #kelompokBox, #keteranganInput').val('');
                 $nominal.val('0');
                 setSaldo(0);
                 setFormEnabled(false);
-                $('#riwayatBody').html('<tr><td colspan="4" class="text-center text-muted py-3">Pilih siswa terlebih dahulu.</td></tr>');
+                $('#riwayatBody').html('<tr><td colspan="5" class="text-center text-muted py-3">Pilih siswa terlebih dahulu.</td></tr>');
             }
 
             function loadSiswa(custid) {
@@ -210,6 +216,7 @@
                     $('#nisBox').val(data.nis);
                     $('#namaBox').val(data.nama);
                     $('#kelasBox').val([data.unit, data.kelas].filter(Boolean).join(' - '));
+                    $('#kelompokBox').val(data.kelompok || '');
                     setSaldo(data.saldo);
                     $nominal.val('0');
                     setFormEnabled(true);
@@ -239,7 +246,7 @@
                         $list.html(rows.map(row => `
                             <button type="button" class="list-group-item list-group-item-action siswa-option" data-custid="${row.custid}">
                                 <div class="fw-semibold">${escapeHtml(row.nis)} - ${escapeHtml(row.nama)}</div>
-                                <small class="text-muted">${escapeHtml([row.unit, row.kelas].filter(Boolean).join(' - '))}</small>
+                                <small class="text-muted">${escapeHtml([row.unit, row.kelas, row.kelompok].filter(Boolean).join(' - '))}</small>
                             </button>`).join('')).show();
                     });
                 }, 300);

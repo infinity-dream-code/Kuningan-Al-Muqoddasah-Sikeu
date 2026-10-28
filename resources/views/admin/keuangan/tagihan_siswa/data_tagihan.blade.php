@@ -832,18 +832,6 @@
                     }
                 }
             }
-            if (e.target.closest('.btn-kirim-wa')) {
-                const rowEl = e.target.closest('tr');
-                const rowData = rowEl ? DT[`${dtOptions.tableId}`].row(rowEl).data() : null;
-                if (!rowData || !rowData.WA_URL) {
-                    warningAlert('Data tagihan tidak ditemukan.');
-                    return;
-                }
-                if (!rowData.NO_WA) {
-                    warningAlert('No WA siswa belum diisi. Silakan pilih kontak tujuan di WhatsApp.');
-                }
-                window.open(rowData.WA_URL, '_blank');
-            }
         });
 
         $(document).on('click', '#main_table tbody .btn-detail-trx', async function (e) {

@@ -87,8 +87,9 @@ class TagihanPaymentReversal
                     ->whereColumn('sccttran.CUSTID', "{$billAlias}.CUSTID")
                     ->where('sccttran.DEBET', '>', 0)
                     ->where(function ($q) {
-                        $q->whereRaw('UPPER(TRIM(COALESCE(sccttran.METODE, ""))) = ?', ['FROM TELLER'])
-                            ->orWhere('sccttran.FIDBANK', self::SALDO_FIDBANK);
+                        $q->whereRaw('UPPER(TRIM(COALESCE(sccttran.METODE, ""))) IN (?, ?)', ['FROM TELLER', 'CASH'])
+                            ->orWhere('sccttran.FIDBANK', self::SALDO_FIDBANK)
+                            ->orWhereRaw("TRIM(COALESCE(CAST(sccttran.FIDBANK AS CHAR), '')) = ?", [self::CASH_FIDBANK]);
                     });
             });
     }
@@ -109,8 +110,9 @@ class TagihanPaymentReversal
             ->where('CUSTID', $tagihan->CUSTID)
             ->where('DEBET', '>', 0)
             ->where(function ($q) {
-                $q->whereRaw('UPPER(TRIM(COALESCE(METODE, ""))) = ?', ['FROM TELLER'])
-                    ->orWhere('FIDBANK', self::SALDO_FIDBANK);
+                $q->whereRaw('UPPER(TRIM(COALESCE(METODE, ""))) IN (?, ?)', ['FROM TELLER', 'CASH'])
+                    ->orWhere('FIDBANK', self::SALDO_FIDBANK)
+                    ->orWhereRaw("TRIM(COALESCE(CAST(FIDBANK AS CHAR), '')) = ?", [self::CASH_FIDBANK]);
             });
     }
 
@@ -166,7 +168,11 @@ class TagihanPaymentReversal
             ->where('BILLID', $tagihan->AA)
             ->where('CUSTID', $tagihan->CUSTID)
             ->where('INSTALLMENT', $lastInstallment)
-            ->whereRaw('UPPER(TRIM(COALESCE(METODE, ""))) = ?', ['FROM TELLER'])
+            ->where(function ($q) {
+                $q->whereRaw('UPPER(TRIM(COALESCE(METODE, ""))) IN (?, ?)', ['FROM TELLER', 'CASH'])
+                    ->orWhere('FIDBANK', self::SALDO_FIDBANK)
+                    ->orWhereRaw("TRIM(COALESCE(CAST(FIDBANK AS CHAR), '')) = ?", [self::CASH_FIDBANK]);
+            })
             ->where('KREDIT', '>', 0)
             ->update(['KREDIT' => 0]);
     }
@@ -178,27 +184,22 @@ class TagihanPaymentReversal
         $billCd = (string) ($tagihan->BILLCD ?? '');
         $userId = $this->resolveCyberKeyUserId();
         $hostname = Str::limit((string) ($request->ip() ?? ''), 250, '');
+        $reffBank = $restore['reffbank'] ?? MultiVa::OPEN;
 
-        $candidates = [
-            MultiVa::cancelProcedure($restore['reffbank'] ?? ''),
-        ];
+        $candidates = array_values(array_unique(array_filter([
+            MultiVa::cancelProcedure($reffBank),
+            MultiVa::cancelProcedureUnsuffixed(),
+            MultiVa::cancelProcedureLegacy($reffBank),
+            'CancelPaymentSaldo',
+        ])));
 
-        if ($restore) {
-            $candidates[] = MultiVa::cancelProcedureLegacy($restore['reffbank']);
-        }
-
-        $candidates[] = 'CancelPaymentSaldo';
-        $candidates = array_values(array_unique(array_filter($candidates)));
-
-        $lastIndex = count($candidates) - 1;
-        foreach ($candidates as $index => $procedureName) {
+        foreach ($candidates as $procedureName) {
             try {
                 $this->callNamedCancelProcedure($procedureName, $custId, $aa, $billCd, $userId, $hostname);
 
                 return;
             } catch (Throwable $e) {
-                $isLast = $index === $lastIndex;
-                if ($isLast || !$this->isMissingRoutine($e, $procedureName)) {
+                if (!$this->isMissingRoutine($e, $procedureName)) {
                     throw $e;
                 }
 
@@ -208,6 +209,47 @@ class TagihanPaymentReversal
                 ]);
             }
         }
+
+        $this->fallbackReverseInPhp($tagihan, $restore);
+    }
+
+    private function fallbackReverseInPhp(scctbill $tagihan, ?array $restore): void
+    {
+        $last = $this->lastPaymentRow($tagihan);
+        $amount = (int) ($last->DEBET ?? 0);
+        if ($amount <= 0) {
+            $amount = (int) ($tagihan->BILLPAID ?? 0);
+        }
+
+        $billPaid = max(0, (int) ($tagihan->BILLPAID ?? 0) - $amount);
+        $installment = max(0, (int) ($tagihan->INSTALLMENT ?? 0) - 1);
+        $billAm = (int) ($tagihan->BILLAM ?? 0);
+
+        $payload = [
+            'BILLPAID' => $billPaid,
+            'PAYMENTLEFT' => max(0, $billAm - $billPaid),
+            'INSTALLMENT' => $installment,
+            'PAIDST' => $billPaid >= $billAm && $billAm > 0 ? 1 : 0,
+        ];
+
+        if ($billPaid <= 0) {
+            $payload['PAIDST'] = 0;
+            $payload['PAIDDT'] = null;
+            $payload['FIDBANK'] = null;
+        }
+
+        $tagihan->update($payload);
+
+        if ($last && (int) ($last->KREDIT ?? 0) > 0) {
+            sccttran::query()->where('urut', $last->urut)->update(['KREDIT' => 0]);
+        }
+
+        Log::info('tagihan-payment.cancel.php_fallback', [
+            'aa' => $tagihan->AA,
+            'amount' => $amount,
+            'billpaid' => $billPaid,
+            'restore' => $restore['reffbank'] ?? null,
+        ]);
     }
 
     private function callNamedCancelProcedure(
@@ -239,14 +281,20 @@ class TagihanPaymentReversal
     private function isMissingRoutine(Throwable $e, string $routine): bool
     {
         $message = $e->getMessage();
+        $code = (int) $e->getCode();
 
-        return stripos($message, $routine) !== false
-            && (
-                stripos($message, 'does not exist') !== false
-                || stripos($message, "doesn't exist") !== false
-                || stripos($message, 'unknown procedure') !== false
-                || stripos($message, '1305') !== false
-            );
+        if ($code === 1305 || stripos($message, '1305') !== false) {
+            return true;
+        }
+
+        $missing = stripos($message, 'does not exist') !== false
+            || stripos($message, "doesn't exist") !== false
+            || stripos($message, 'unknown procedure') !== false;
+
+        return $missing && (
+            stripos($message, $routine) !== false
+            || stripos($message, 'PROCEDURE') !== false
+        );
     }
 
     /** View saldo 93/94 hanya menjumlah KREDIT-DEBET yang REFFBANK-nya 93/94. */

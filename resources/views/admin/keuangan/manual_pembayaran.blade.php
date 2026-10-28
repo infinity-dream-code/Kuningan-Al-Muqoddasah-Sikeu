@@ -75,7 +75,7 @@
                     <div class="{{ \App\Support\MultiVa::closeEnabled() ? 'col-md-6' : 'col-md-12' }}">
                         <div class="mb-5">
                             <label class="form-label" for="saldo_open">
-                                {{ \App\Support\MultiVa::closeEnabled() ? 'Saldo VA Open (93)' : 'Saldo VA (Open)' }}
+                                {{ \App\Support\MultiVa::closeEnabled() ? 'Saldo VA Open (93)' : 'Saldo VA' }}
                             </label>
                             <div class="input-group input-group-merge">
                                 <span class="input-group-text">Rp. </span>

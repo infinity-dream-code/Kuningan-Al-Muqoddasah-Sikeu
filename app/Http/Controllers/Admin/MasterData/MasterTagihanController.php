@@ -39,8 +39,6 @@ class MasterTagihanController extends Controller
 
         if (MultiVa::masterVaSelectable()) {
             $columns[] = ['data' => 'VA', 'name' => 'VA', 'searchable' => true, 'orderable' => true];
-        } else {
-            $columns[] = ['data' => 'VA', 'name' => 'VA', 'searchable' => false, 'orderable' => false];
         }
 
         $columns[] = ['data' => 'isINSTALLMENT_label', 'name' => 'Status Dapat Di Cicil', 'searchable' => false, 'orderable' => true];

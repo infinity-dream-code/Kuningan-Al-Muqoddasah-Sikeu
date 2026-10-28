@@ -10,6 +10,7 @@ use App\Models\mst_thn_aka;
 use App\Models\scctcust;
 use App\Models\sccttran;
 use App\Support\MultiVa;
+use App\Support\SchoolScope;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
@@ -123,6 +124,10 @@ class SaldoVirtualAccountController extends Controller
 
     protected function transListQuery()
     {
+        if (!MultiVa::closeEnabled()) {
+            return MultiVa::fallbackTransQuery();
+        }
+
         $view = MultiVa::resolveExistingView([
             MultiVa::transView($this->reffBank),
             'v_trans_saldo',
@@ -153,34 +158,18 @@ class SaldoVirtualAccountController extends Controller
                 ]);
         }
 
-        return DB::connection('DATA_MYSQL')
-            ->table('sccttran as trx')
-            ->leftJoin('scctcust as c', 'c.CUSTID', '=', 'trx.CUSTID')
-            ->where(function ($q) {
-                $q->whereNull('trx.FIDBANK')
-                    ->orWhereRaw("TRIM(COALESCE(CAST(trx.FIDBANK AS CHAR), '')) = ''")
-                    ->orWhereRaw("TRIM(COALESCE(CAST(trx.FIDBANK AS CHAR), '')) != ?", ['1140000']);
-            })
-            ->select([
-                'trx.TRXDATE as TRXDATE',
-                DB::raw('COALESCE(trx.METODE, trx.NOREFF, "") as KETERANGAN'),
-                'trx.DEBET as DEBET',
-                'trx.KREDIT as KREDIT',
-                'c.NOCUST as NOCUST',
-                'c.NUM2ND as NUM2ND',
-                'trx.NOREFF as NOREFF',
-                'c.NMCUST as NMCUST',
-                'c.CODE01 as CODE01',
-                'c.CODE02 as CODE02',
-                'c.DESC02 as DESC02',
-                'c.DESC03 as DESC03',
-            ]);
+        return MultiVa::fallbackTransQuery();
     }
 
     protected function applySiswaToTrans($query, ?scctcust $siswa, string $nocustCol = 'NOCUST', string $num2ndCol = 'NUM2ND')
     {
         if (!$siswa) {
             return $query;
+        }
+
+        $custId = (int) ($siswa->CUSTID ?? 0);
+        if ($custId > 0) {
+            return $query->where('trx.CUSTID', $custId);
         }
 
         if ($siswa->NOCUST) {
@@ -234,6 +223,10 @@ class SaldoVirtualAccountController extends Controller
             $data['exportTransaksiUrl'] = $this->namedRoute('export', ['id' => $id]);
 
             $data['siswa'] = scctcust::find($id);
+
+            if ($data['siswa'] && !SchoolScope::studentAccessible($data['siswa'])) {
+                $data['siswa'] = null;
+            }
 
             if ($data['siswa']) {
                 if ($data['siswa']->NOCUST && $data['siswa']->NOCUST != '-') {
@@ -348,6 +341,9 @@ class SaldoVirtualAccountController extends Controller
     private function getCustTransactions(string|int $custId)
     {
         $siswa = scctcust::query()->where('CUSTID', $custId)->first();
+        if (!$siswa || !SchoolScope::studentAccessible($siswa)) {
+            return collect();
+        }
         $query = $this->applySiswaToTrans($this->transQuery(), $siswa);
 
         return $query->orderBy('TRXDATE', 'desc')
@@ -481,6 +477,7 @@ class SaldoVirtualAccountController extends Controller
         if (!empty($scopedCodes)) {
             $query->whereIn('CODE01', $scopedCodes);
         }
+        SchoolScope::applyGender($query, 'scctcust.CODE04');
 
         if (!blank($searchValue)) {
             $sanitizeSearch = str_replace(['\\', '%', '_'], ['\\\\', '\%', '\_'], $searchValue);
@@ -493,6 +490,7 @@ class SaldoVirtualAccountController extends Controller
 
         $totalQuery = $this->saldoQuery()
             ->when(!empty($scopedCodes), fn ($q) => $q->whereIn('CODE01', $scopedCodes));
+        SchoolScope::applyGender($totalQuery, 'scctcust.CODE04');
         $totalRecords = (int) $totalQuery->count();
         $totalRecordswithFilter = (int) (clone $query)->count();
 
@@ -540,6 +538,9 @@ class SaldoVirtualAccountController extends Controller
     {
         $custid = $request->input('CUSTID');
         $siswa = $custid ? scctcust::query()->where('CUSTID', $custid)->first() : null;
+        if ($siswa && !SchoolScope::studentAccessible($siswa)) {
+            $siswa = null;
+        }
 
         $draw = $request->get('draw');
         $start = $request->get("start");
@@ -564,23 +565,29 @@ class SaldoVirtualAccountController extends Controller
         $searchValue = $search_arr['value'] ?? '';
 
         $columnName = match ($columnName) {
-            'METODE', 'KETERANGAN' => 'KETERANGAN',
-            'DEBET' => 'DEBET',
-            'KREDIT' => 'KREDIT',
-            'NOREFF' => 'NOREFF',
-            'NOCUST' => 'NOCUST',
-            'no', '', null => 'TRXDATE',
-            default => 'TRXDATE',
+            'METODE', 'KETERANGAN' => 'trx.METODE',
+            'DEBET' => 'trx.DEBET',
+            'KREDIT' => 'trx.KREDIT',
+            'NOREFF' => 'trx.NOREFF',
+            'NOCUST' => 'c.NOCUST',
+            'no', '', null => 'trx.TRXDATE',
+            default => 'trx.TRXDATE',
         };
 
-        $query = $this->applySiswaToTrans($this->transQuery(), $siswa);
+        $query = $this->transQuery();
+        if (!$siswa) {
+            $query->whereRaw('1 = 0');
+        } else {
+            $query = $this->applySiswaToTrans($query, $siswa);
+        }
 
         if (!blank($searchValue)) {
             $sanitizeSearch = str_replace(['\\', '%', '_'], ['\\\\', '\%', '\_'], $searchValue);
-            $query->where(function ($q) use ($sanitizeSearch) {
-                $q->where('KETERANGAN', 'like', '%' . $sanitizeSearch . '%')
-                    ->orWhere('NOREFF', 'like', '%' . $sanitizeSearch . '%')
-                    ->orWhere('NOCUST', 'like', '%' . $sanitizeSearch . '%');
+            $like = '%' . $sanitizeSearch . '%';
+            $query->where(function ($q) use ($like) {
+                $q->where('trx.METODE', 'like', $like)
+                    ->orWhere('trx.NOREFF', 'like', $like)
+                    ->orWhere('c.NOCUST', 'like', $like);
             });
         }
 
@@ -715,10 +722,9 @@ class SaldoVirtualAccountController extends Controller
             $requestedData = $columnName_arr[$columnIndex]['data'] ?? null;
             if ($requestedData && $requestedData !== 'no') {
                 $columnName = match ($requestedData) {
-                    'NOCUST' => 'trx.NOCUST',
+                    'NOCUST', 'NOVA' => 'c.NOCUST',
                     'NMCUST', 'CODE02', 'DESC02', 'DESC03' => 'c.' . $requestedData,
-                    'NOVA' => 'trx.NOCUST',
-                    'METODE' => 'trx.KETERANGAN',
+                    'METODE' => 'trx.METODE',
                     'TRXDATE' => 'trx.TRXDATE',
                     'DEBET' => 'trx.DEBET',
                     'KREDIT' => 'trx.KREDIT',
@@ -729,6 +735,7 @@ class SaldoVirtualAccountController extends Controller
         }
 
         $query = $this->transListQuery();
+        SchoolScope::applyGender($query, 'c.CODE04');
 
         $filter = $request->input('filter', []);
         foreach ($filter as $key => $val) {
@@ -756,10 +763,10 @@ class SaldoVirtualAccountController extends Controller
         if (!blank($searchValue)) {
             $sanitizeSearch = str_replace(['\\', '%', '_'], ['\\\\', '\%', '\_'], $searchValue);
             $query->where(function ($q) use ($sanitizeSearch) {
-                $q->where('trx.NOCUST', 'like', '%' . $sanitizeSearch . '%')
-                    ->orWhere('trx.NUM2ND', 'like', '%' . $sanitizeSearch . '%')
+                $q->where('c.NOCUST', 'like', '%' . $sanitizeSearch . '%')
+                    ->orWhere('c.NUM2ND', 'like', '%' . $sanitizeSearch . '%')
                     ->orWhere('trx.NOREFF', 'like', '%' . $sanitizeSearch . '%')
-                    ->orWhere('trx.KETERANGAN', 'like', '%' . $sanitizeSearch . '%')
+                    ->orWhere('trx.METODE', 'like', '%' . $sanitizeSearch . '%')
                     ->orWhere('c.NMCUST', 'like', '%' . $sanitizeSearch . '%');
             });
         }

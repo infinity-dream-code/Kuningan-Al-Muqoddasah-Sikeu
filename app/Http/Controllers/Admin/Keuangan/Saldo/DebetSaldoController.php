@@ -62,12 +62,13 @@ class DebetSaldoController extends Controller
 
         $rows = $query->orderBy('scctcust.NMCUST')
             ->limit(15)
-            ->get(['scctcust.CUSTID', 'scctcust.NOCUST', 'scctcust.NUM2ND', 'scctcust.NMCUST', 'scctcust.DESC02', 'scctcust.CODE02'])
+            ->get(['scctcust.CUSTID', 'scctcust.NOCUST', 'scctcust.NUM2ND', 'scctcust.NMCUST', 'scctcust.DESC02', 'scctcust.DESC03', 'scctcust.CODE02'])
             ->map(fn ($row) => [
                 'custid' => (int) $row->CUSTID,
                 'nis' => $this->nisOf($row),
                 'nama' => trim((string) $row->NMCUST),
                 'kelas' => trim((string) ($row->DESC02 ?? '')),
+                'kelompok' => trim((string) ($row->DESC03 ?? '')),
                 'unit' => trim((string) ($row->CODE02 ?? '')),
             ])
             ->values();
@@ -87,6 +88,7 @@ class DebetSaldoController extends Controller
             'nis' => $this->nisOf($siswa),
             'nama' => trim((string) $siswa->NMCUST),
             'kelas' => trim((string) ($siswa->DESC02 ?? '')),
+            'kelompok' => trim((string) ($siswa->DESC03 ?? '')),
             'unit' => trim((string) ($siswa->CODE02 ?? '')),
             'saldo' => MultiVa::custSaldo($siswa->CUSTID, MultiVa::OPEN),
             'riwayat' => $this->riwayatSiswa((int) $siswa->CUSTID),
@@ -150,12 +152,8 @@ class DebetSaldoController extends Controller
                     'FIDBANK' => self::FIDBANK,
                 ];
                 if ($keterangan !== '') {
-                    if ($this->hasColumn('sccttran', 'Keterangan')) {
-                        $tran['Keterangan'] = $keterangan;
-                    }
-                    if ($this->hasColumn('scctcashout', 'Keterangan')) {
-                        $cashout['Keterangan'] = $keterangan;
-                    }
+                    $this->applyKeterangan($tran, 'sccttran', $keterangan);
+                    $this->applyKeterangan($cashout, 'scctcashout', $keterangan);
                 }
 
                 $conn->table('sccttran')->insert($tran);
@@ -194,6 +192,7 @@ class DebetSaldoController extends Controller
             ['data' => 'NMCUST', 'name' => 'Nama', 'searchable' => true, 'orderable' => true, 'exportable' => true],
             ['data' => 'BILLAM', 'name' => 'Nominal', 'orderable' => true, 'className' => 'dt-right', 'columnType' => 'currency', 'exportable' => true],
             ['data' => 'Teller', 'name' => 'Teller', 'searchable' => true, 'orderable' => true, 'exportable' => true],
+            ['data' => 'Keterangan', 'name' => 'Keterangan', 'searchable' => true, 'orderable' => false, 'exportable' => true],
         ];
     }
 
@@ -245,15 +244,22 @@ class DebetSaldoController extends Controller
         $totalFiltered = (clone $base)->count();
         $totalNominal = (int) (clone $base)->sum(DB::raw('CAST(co.BILLAM AS SIGNED)'));
 
+        $select = ['co.TanggalKeluar', 'co.TRANSNO', 'co.BILLAM', 'co.Teller', 'c.NOCUST', 'c.NUM2ND', 'c.NMCUST'];
+        $cashoutKet = $this->keteranganColumn('scctcashout');
+        if ($cashoutKet) {
+            $select[] = 'co.' . $cashoutKet . ' as Keterangan';
+        }
+
         $records = $base->orderBy($orderColumn, $orderDir)
             ->orderByDesc('co.urut')
             ->skip($start)
             ->take($length > 0 ? $length : 10)
-            ->get(['co.TanggalKeluar', 'co.TRANSNO', 'co.BILLAM', 'co.Teller', 'c.NOCUST', 'c.NUM2ND', 'c.NMCUST'])
+            ->get($select)
             ->map(function ($row) {
                 $row->NOCUST = $this->nisOf($row);
                 $row->BILLAM = (int) trim((string) $row->BILLAM);
                 $row->Teller = trim((string) $row->Teller);
+                $row->Keterangan = trim((string) ($row->Keterangan ?? ''));
                 unset($row->NUM2ND);
 
                 return $row;
@@ -281,23 +287,42 @@ class DebetSaldoController extends Controller
             ->where('scctcust.CUSTID', $custid);
         SchoolScope::applyStudent($query, 'scctcust');
 
-        return $query->first(['scctcust.CUSTID', 'scctcust.NOCUST', 'scctcust.NUM2ND', 'scctcust.NMCUST', 'scctcust.DESC02', 'scctcust.CODE02']);
+        return $query->first(['scctcust.CUSTID', 'scctcust.NOCUST', 'scctcust.NUM2ND', 'scctcust.NMCUST', 'scctcust.DESC02', 'scctcust.DESC03', 'scctcust.CODE02']);
     }
 
     private function riwayatSiswa(int $custid): Collection
     {
-        return DB::connection('DATA_MYSQL')
-            ->table('scctcashout')
-            ->where('CUSTID', $custid)
-            ->orderByDesc('TanggalKeluar')
-            ->orderByDesc('urut')
-            ->limit(50)
-            ->get(['TanggalKeluar', 'TRANSNO', 'BILLAM', 'Teller'])
+        $query = DB::connection('DATA_MYSQL')
+            ->table('scctcashout as co')
+            ->leftJoin('sccttran as t', function ($join) {
+                $join->on('t.TRANSNO', '=', 'co.TRANSNO')
+                    ->on('t.CUSTID', '=', 'co.CUSTID')
+                    ->where('t.METODE', self::METODE);
+            })
+            ->where('co.CUSTID', $custid)
+            ->orderByDesc('co.TanggalKeluar')
+            ->orderByDesc('co.urut')
+            ->limit(50);
+
+        $select = ['co.TanggalKeluar', 'co.TRANSNO', 'co.BILLAM', 'co.Teller'];
+        $cashoutKet = $this->keteranganColumn('scctcashout');
+        $tranKet = $this->keteranganColumn('sccttran');
+        if ($cashoutKet) {
+            $select[] = 'co.' . $cashoutKet . ' as ket_cashout';
+        }
+        if ($tranKet) {
+            $select[] = 't.' . $tranKet . ' as ket_tran';
+        } elseif ($this->hasColumn('sccttran', 'BILLTARGET')) {
+            $select[] = 't.BILLTARGET as ket_tran';
+        }
+
+        return $query->get($select)
             ->map(fn ($row) => [
                 'tanggal' => $row->TanggalKeluar ? Carbon::parse($row->TanggalKeluar)->format('d-m-Y H:i') : '-',
                 'transno' => trim((string) $row->TRANSNO),
                 'nominal' => (int) trim((string) $row->BILLAM),
                 'teller' => trim((string) $row->Teller),
+                'keterangan' => trim((string) (($row->ket_cashout ?? '') !== '' ? $row->ket_cashout : ($row->ket_tran ?? ''))),
             ]);
     }
 
@@ -344,5 +369,30 @@ class DebetSaldoController extends Controller
         }
 
         return $cache[$key];
+    }
+
+    private function keteranganColumn(string $table): ?string
+    {
+        foreach (['Keterangan', 'KETERANGAN', 'keterangan'] as $column) {
+            if ($this->hasColumn($table, $column)) {
+                return $column;
+            }
+        }
+
+        return null;
+    }
+
+    private function applyKeterangan(array &$row, string $table, string $value): void
+    {
+        $column = $this->keteranganColumn($table);
+        if ($column) {
+            $row[$column] = $value;
+
+            return;
+        }
+
+        if ($table === 'sccttran' && $this->hasColumn('sccttran', 'BILLTARGET')) {
+            $row['BILLTARGET'] = $value;
+        }
     }
 }

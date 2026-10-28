@@ -82,17 +82,6 @@ class SccttranController extends Controller
             ->orderByRaw("CASE WHEN jenjang REGEXP '^[0-9]+$' THEN 0 ELSE 1 END, jenjang")
             ->orderByRaw("CASE WHEN kelas REGEXP '^[0-9]+$' THEN 0 ELSE 1 END, kelas")
             ->get();
-        $data['vaOptions'] = [
-            MultiVa::OPEN => MultiVa::optionLabel(MultiVa::OPEN),
-        ];
-        if (MultiVa::closeEnabled()) {
-            $data['vaOptions'][MultiVa::CLOSE] = MultiVa::optionLabel(MultiVa::CLOSE);
-        }
-        $data['jenisOptions'] = [
-            'topup' => 'TOP UP',
-            'payment' => 'Payment',
-        ];
-
         return view('admin.keuangan.saldo.sccttran.index', $data);
     }
 
