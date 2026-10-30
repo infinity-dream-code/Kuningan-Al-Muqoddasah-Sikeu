@@ -27,6 +27,10 @@ Route::prefix("admin")
     ->middleware(["auth", "check.roles:admin"])
     ->group(function () {
         Route::get("/", [AdminController::class, "index"])->name("index");
+        Route::get("ganti-password", [\App\Http\Controllers\Admin\ChangePasswordController::class, "index"])
+            ->name("ganti-password.index");
+        Route::post("ganti-password", [\App\Http\Controllers\Admin\ChangePasswordController::class, "update"])
+            ->name("ganti-password.update");
 
         Route::prefix("master-data")->name("master-data.")->group(function () {
             Route::get("get-logo", function (\Illuminate\Http\Request $request) {

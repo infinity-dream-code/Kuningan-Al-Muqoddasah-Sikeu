@@ -157,6 +157,12 @@
             </ul>
         </li>
 
+        <li class="menu-item {{ Request::is(['admin/ganti-password*']) ? 'active' : '' }}">
+            <a href="{{ route('admin.ganti-password.index') }}" class="menu-link">
+                <i class="menu-icon ri ri-lock-password-line"></i>
+                <div data-i18n="Ganti Password">Ganti Password</div>
+            </a>
+        </li>
         <li class="menu-item mt-auto pb-2">
             <a href="{{route('logout')}}" class="menu-link btn-danger text-white"  onclick="event.preventDefault();
                               document.getElementById('logout-form').submit();">

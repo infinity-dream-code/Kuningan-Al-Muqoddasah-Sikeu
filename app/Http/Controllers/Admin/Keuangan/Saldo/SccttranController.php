@@ -8,6 +8,7 @@ use App\Models\mst_sekolah;
 use App\Models\mst_thn_aka;
 use App\Models\scctcust;
 use App\Support\MultiVa;
+use App\Support\SchoolScope;
 use App\Models\sccttran;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -82,6 +83,17 @@ class SccttranController extends Controller
             ->orderByRaw("CASE WHEN jenjang REGEXP '^[0-9]+$' THEN 0 ELSE 1 END, jenjang")
             ->orderByRaw("CASE WHEN kelas REGEXP '^[0-9]+$' THEN 0 ELSE 1 END, kelas")
             ->get();
+        $data['metodeOptions'] = sccttran::query()
+            ->select('METODE')
+            ->whereNotNull('METODE')
+            ->whereRaw("TRIM(COALESCE(METODE, '')) != ''")
+            ->distinct()
+            ->orderBy('METODE')
+            ->pluck('METODE')
+            ->map(fn ($m) => trim((string) $m))
+            ->filter()
+            ->unique()
+            ->values();
         return view('admin.keuangan.saldo.sccttran.index', $data);
     }
 
@@ -92,7 +104,6 @@ class SccttranController extends Controller
             ['data' => 'NOCUST', 'name' => 'NIS', 'searchable' => true, 'orderable' => true, 'exportable' => true],
             ['data' => 'NOVA', 'name' => 'NO VA', 'exportable' => true],
             ['data' => 'NMCUST', 'name' => 'NAMA', 'searchable' => true, 'orderable' => true, 'exportable' => true],
-            ['data' => 'KODE_PRODUK', 'name' => 'Kode Produk', 'orderable' => true, 'exportable' => true],
             ['data' => 'METODE', 'name' => 'Metode', 'orderable' => true, 'exportable' => true],
             ['data' => 'TRXDATE', 'name' => 'Tanggal Transaksi', 'orderable' => true, 'columnType' => 'timestamp', 'exportable' => true],
             ['data' => 'NOREFF', 'name' => 'No Ref', 'orderable' => true, 'exportable' => true],
@@ -130,8 +141,6 @@ class SccttranController extends Controller
                 $columnName = $defaultColumn;
             } elseif ($requestedColumn === 'NOMINAL') {
                 $columnName = DB::raw("CASE WHEN UPPER(TRIM(COALESCE(sccttran.METODE, ''))) = 'TOP UP' THEN COALESCE(sccttran.KREDIT, 0) ELSE COALESCE(sccttran.DEBET, 0) END");
-            } elseif ($requestedColumn === 'KODE_PRODUK') {
-                $columnName = 'sccttran.REFFBANK';
             } elseif (!str_contains((string) $requestedColumn, '.')) {
                 $columnName = in_array($requestedColumn, ['NOCUST', 'NMCUST', 'NUM2ND', 'NOVA'], true)
                     ? 'scctcust.' . ($requestedColumn === 'NOVA' ? 'NOCUST' : $requestedColumn)
@@ -146,6 +155,7 @@ class SccttranController extends Controller
         $filter = $request->input('filter', []);
         $jenis = null;
         $vaFilter = null;
+        $metodeFilter = null;
         if (is_array($filter)) {
             foreach ($filter as $key => $val) {
                 if (is_array($val)) {
@@ -162,6 +172,11 @@ class SccttranController extends Controller
 
                 if ($key === 'jenis') {
                     $jenis = strtolower(trim((string) $val));
+                    continue;
+                }
+
+                if ($key === 'metode') {
+                    $metodeFilter = trim((string) $val);
                     continue;
                 }
 
@@ -258,12 +273,16 @@ class SccttranController extends Controller
             'sccttran.TRANSNO',
         ];
 
-        $query = $this->topUpVaScope(
-            sccttran::query()
-                ->leftJoin('scctcust', 'scctcust.CUSTID', 'sccttran.CUSTID'),
-            'sccttran.',
-            $jenis
-        );
+        $query = sccttran::query()
+            ->leftJoin('scctcust', 'scctcust.CUSTID', 'sccttran.CUSTID');
+
+        if ($metodeFilter) {
+            $query->whereRaw("UPPER(TRIM(COALESCE(sccttran.METODE, ''))) = ?", [strtoupper($metodeFilter)]);
+        } elseif ($jenis) {
+            $query = $this->topUpVaScope($query, 'sccttran.', $jenis);
+        }
+
+        SchoolScope::applyGender($query, 'scctcust.CODE04');
 
         if ($vaFilter) {
             $vaValues = array_values(array_unique(array_filter([
@@ -288,7 +307,9 @@ class SccttranController extends Controller
             }
         });
 
-        $totalRecords = $this->topUpVaScope(sccttran::query())->count();
+        $totalBase = sccttran::query()->leftJoin('scctcust', 'scctcust.CUSTID', 'sccttran.CUSTID');
+        SchoolScope::applyGender($totalBase, 'scctcust.CODE04');
+        $totalRecords = $totalBase->count();
         $totalRecordswithFilter = (clone $query)->count();
         $totalNominal = (int) (clone $query)->sum(DB::raw(
             "CASE WHEN UPPER(TRIM(COALESCE(sccttran.METODE, ''))) = 'TOP UP' THEN COALESCE(sccttran.KREDIT, 0) ELSE COALESCE(sccttran.DEBET, 0) END"
@@ -305,9 +326,8 @@ class SccttranController extends Controller
                 $item->NOVA = $va
                     ? MultiVa::formatNoVa($nis, $va)
                     : MultiVa::formatNoVaBoth($nis);
-                $item->KODE_PRODUK = $va ? MultiVa::optionLabel($va) : '-';
                 $metode = strtoupper(trim((string) ($item->METODE ?? '')));
-                $item->METODE = $metode === 'FROM INVOICE' ? 'Payment' : ($item->METODE ?: '-');
+                $item->METODE = $item->METODE ?: '-';
                 $item->NOMINAL = $metode === 'TOP UP'
                     ? (int) ($item->KREDIT ?? 0)
                     : (int) (($item->DEBET ?? 0) > 0 ? $item->DEBET : ($item->KREDIT ?? 0));
@@ -323,7 +343,7 @@ class SccttranController extends Controller
             'data' => $records,
             'totals' => [
                 'nominal' => [
-                    'location' => 8,
+                    'location' => 7,
                     'value' => $totalNominal,
                     'columnType' => 'currency',
                 ],

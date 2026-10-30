@@ -149,11 +149,7 @@
                 getDT(dtOptions);
 
                 setTimeout(function () {
-                    let total = 0;
-                    let kredit = {{$totalKredit}};
-                    let debet = {{$totalDebet}};
-
-                    total = parseInt(kredit) - parseInt(debet);
+                    let total = {{ (int) ($saldo ?? (($totalKredit ?? 0) - ($totalDebet ?? 0))) }};
 
                     total = new Intl.NumberFormat('id-ID', {
                         style: "currency",

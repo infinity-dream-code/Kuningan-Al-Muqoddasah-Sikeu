@@ -122,6 +122,23 @@
                             </div>
 
                             <div class="mb-3 row">
+                                <label class="col-sm-4 col-form-label form-label" for="filter[metode]">
+                                    Metode
+                                </label>
+                                <div class="col">
+                                    <select class="form-select" id="filter[metode]" name="filter[metode]"
+                                            data-control="select2" data-placeholder="Pilih Metode">
+                                        <option value="all">Semua</option>
+                                        @isset($metodeOptions)
+                                            @foreach($metodeOptions as $metode)
+                                                <option value="{{ $metode }}">{{ $metode }}</option>
+                                            @endforeach
+                                        @endisset
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="mb-3 row">
                                 <label class="col-sm-4 col-form-label form-label" for="filter[kelas]">
                                     Kelas
                                 </label>

@@ -198,8 +198,8 @@
                                                 </div>
                                             </div>
                                             <div class="flex-grow-1">
-                                                <span class="fw-medium d-block small">{{config('app.name')}}</span>
-                                                <small class="text-muted">admin</small>
+                                                <span class="fw-medium d-block small">{{ Auth::user()->users ?? config('app.name') }}</span>
+                                                <small class="text-muted">{{ Auth::user()->ket ?? 'admin' }}</small>
                                             </div>
                                         </div>
                                     </a>
@@ -213,6 +213,12 @@
                                 {{--                                            class="align-middle">Profil</span>--}}
                                 {{--                                    </a>--}}
                                 {{--                                </li>--}}
+                                <li>
+                                    <a class="dropdown-item" href="{{ route('admin.ganti-password.index') }}">
+                                        <i class="ri-lock-password-line ri-xl me-3"></i>
+                                        <span class="align-middle">Ganti Password</span>
+                                    </a>
+                                </li>
                                 <li>
                                     <div class="d-grid px-4 pt-2 pb-1">
                                         <a href="{{route('logout')}}" class="btn btn-sm btn-danger d-flex"  onclick="event.preventDefault();

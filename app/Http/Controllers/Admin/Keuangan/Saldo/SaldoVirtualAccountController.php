@@ -179,6 +179,19 @@ class SaldoVirtualAccountController extends Controller
         return $query->where($num2ndCol, $siswa->NUM2ND ?? '');
     }
 
+    /** Transaksi saldo siswa langsung dari sccttran (bukan view). */
+    protected function siswaTransQuery(scctcust $siswa)
+    {
+        return DB::connection('DATA_MYSQL')
+            ->table('sccttran as trx')
+            ->where('trx.CUSTID', $siswa->CUSTID)
+            ->where(function ($q) {
+                $q->whereNull('trx.FIDBANK')
+                    ->orWhereRaw("TRIM(COALESCE(CAST(trx.FIDBANK AS CHAR), '')) = ''")
+                    ->orWhereRaw("TRIM(COALESCE(CAST(trx.FIDBANK AS CHAR), '')) != ?", ['1140000']);
+            });
+    }
+
     protected function formatNova(mixed $nis): string
     {
         return scctcust::formatVA(MultiVa::prefix($this->reffBank), $nis);
@@ -236,9 +249,10 @@ class SaldoVirtualAccountController extends Controller
                 }
                 $data['siswa']->NOVA = $NOVA;
 
-                $trxQuery = $this->applySiswaToTrans($this->transQuery(), $data['siswa']);
-                $data['totalKredit'] = (int) (clone $trxQuery)->sum('KREDIT');
-                $data['totalDebet'] = (int) (clone $trxQuery)->sum('DEBET');
+                $trxQuery = $this->siswaTransQuery($data['siswa']);
+                $data['totalKredit'] = (int) (clone $trxQuery)->sum('trx.KREDIT');
+                $data['totalDebet'] = (int) (clone $trxQuery)->sum('trx.DEBET');
+                $data['saldo'] = MultiVa::custSaldo($data['siswa']->CUSTID, $this->reffBank);
 //                $data['siswa']-> = $NOVA;
             } else {
                 throw new Exception('Siswa tidak ditemukan');
@@ -344,14 +358,16 @@ class SaldoVirtualAccountController extends Controller
         if (!$siswa || !SchoolScope::studentAccessible($siswa)) {
             return collect();
         }
-        $query = $this->applySiswaToTrans($this->transQuery(), $siswa);
+        $query = $this->siswaTransQuery($siswa);
 
-        return $query->orderBy('TRXDATE', 'desc')
-            ->get()
-            ->map(function ($item) {
-                $item->METODE = $item->KETERANGAN ?? $item->METODE ?? null;
-                return $item;
-            });
+        return $query->orderBy('trx.TRXDATE', 'desc')
+            ->get([
+                'trx.METODE',
+                'trx.TRXDATE',
+                'trx.DEBET',
+                'trx.KREDIT',
+                'trx.NOREFF',
+            ]);
     }
 
     public function getColumn(Request $request)
@@ -569,17 +585,13 @@ class SaldoVirtualAccountController extends Controller
             'DEBET' => 'trx.DEBET',
             'KREDIT' => 'trx.KREDIT',
             'NOREFF' => 'trx.NOREFF',
-            'NOCUST' => 'c.NOCUST',
             'no', '', null => 'trx.TRXDATE',
             default => 'trx.TRXDATE',
         };
 
-        $query = $this->transQuery();
-        if (!$siswa) {
-            $query->whereRaw('1 = 0');
-        } else {
-            $query = $this->applySiswaToTrans($query, $siswa);
-        }
+        $query = $siswa
+            ? $this->siswaTransQuery($siswa)
+            : DB::connection('DATA_MYSQL')->table('sccttran as trx')->whereRaw('1 = 0');
 
         if (!blank($searchValue)) {
             $sanitizeSearch = str_replace(['\\', '%', '_'], ['\\\\', '\%', '\_'], $searchValue);
@@ -587,7 +599,7 @@ class SaldoVirtualAccountController extends Controller
             $query->where(function ($q) use ($like) {
                 $q->where('trx.METODE', 'like', $like)
                     ->orWhere('trx.NOREFF', 'like', $like)
-                    ->orWhere('c.NOCUST', 'like', $like);
+                    ->orWhere('trx.TRANSNO', 'like', $like);
             });
         }
 
@@ -600,19 +612,15 @@ class SaldoVirtualAccountController extends Controller
         }
 
         $records = $pageQuery
-            ->get()
-            ->map(function ($item) {
-                $item->METODE = $item->KETERANGAN ?? null;
-                return $item;
-            })
+            ->get(['trx.METODE', 'trx.TRXDATE', 'trx.DEBET', 'trx.KREDIT', 'trx.NOREFF'])
             ->toArray();
 
         $totalKredit = 0;
         $totalDebet = 0;
         if ($siswa) {
-            $sumQuery = $this->applySiswaToTrans($this->transQuery(), $siswa);
-            $totalKredit = (int) (clone $sumQuery)->sum('KREDIT');
-            $totalDebet = (int) (clone $sumQuery)->sum('DEBET');
+            $sumQuery = $this->siswaTransQuery($siswa);
+            $totalKredit = (int) (clone $sumQuery)->sum('trx.KREDIT');
+            $totalDebet = (int) (clone $sumQuery)->sum('trx.DEBET');
         }
 
         $response = [
