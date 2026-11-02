@@ -26,7 +26,8 @@ class TagihanPaymentReversal
             return;
         }
 
-        $last = $this->lastPaymentRow($tagihan);
+        $last = $this->lastPaymentRow($tagihan)
+            ?? $this->lastLeftoverCashSaldoRow($tagihan);
 
         if ($this->isManualCashOrSaldo($tagihan, $last)) {
             $this->reverseManualInPhp($tagihan, $last);
@@ -110,7 +111,8 @@ class TagihanPaymentReversal
             return true;
         }
 
-        return $this->paymentTransactionQuery($tagihan)->exists();
+        return $this->paymentTransactionQuery($tagihan)->exists()
+            || $this->leftoverCashSaldoQuery($tagihan)->exists();
     }
 
     private function paymentTransactionQuery(scctbill $tagihan)
@@ -232,7 +234,16 @@ class TagihanPaymentReversal
 
     private function fallbackReverseInPhp(scctbill $tagihan, ?array $restore): void
     {
-        $this->reverseManualInPhp($tagihan, $this->lastPaymentRow($tagihan), $restore);
+        $last = $this->lastPaymentRow($tagihan)
+            ?? $this->lastLeftoverCashSaldoRow($tagihan);
+
+        if ($this->isManualCashOrSaldo($tagihan, $last)) {
+            $this->reverseManualInPhp($tagihan, $last);
+
+            return;
+        }
+
+        $this->reverseManualInPhp($tagihan, $last, $restore);
     }
 
     private function isManualCashOrSaldo(scctbill $tagihan, ?sccttran $last): bool
@@ -243,7 +254,12 @@ class TagihanPaymentReversal
             return true;
         }
 
-        return $this->isCashMetode($last);
+        return $this->isCashMetode($last) || $this->isSaldoMetode($last);
+    }
+
+    private function isSaldoMetode(?sccttran $last): bool
+    {
+        return strtoupper(trim((string) ($last->METODE ?? ''))) === 'FROM TELLER';
     }
 
     private function isCashMetode(?sccttran $last): bool
@@ -263,7 +279,13 @@ class TagihanPaymentReversal
 
     private function reverseManualInPhp(scctbill $tagihan, ?sccttran $last, ?array $restore = null): void
     {
+        $last ??= $this->lastLeftoverCashSaldoRow($tagihan);
+        $isCashOrSaldo = $this->isManualCashOrSaldo($tagihan, $last);
+
         $amount = (int) ($last->DEBET ?? 0);
+        if ($amount <= 0) {
+            $amount = (int) ($last->KREDIT ?? 0);
+        }
         if ($amount <= 0) {
             $amount = (int) ($tagihan->BILLPAID ?? 0);
         }
@@ -271,8 +293,6 @@ class TagihanPaymentReversal
         $billPaid = max(0, (int) ($tagihan->BILLPAID ?? 0) - $amount);
         $installment = max(0, (int) ($tagihan->INSTALLMENT ?? 0) - 1);
         $billAm = (int) ($tagihan->BILLAM ?? 0);
-        $fidBank = $this->normalizeFidBank($tagihan->FIDBANK ?? $last->FIDBANK ?? '');
-        $isCash = $this->isCashFidBank($fidBank) || $this->isCashMetode($last);
 
         $payload = [
             'BILLPAID' => $billPaid,
@@ -290,31 +310,108 @@ class TagihanPaymentReversal
 
         $tagihan->update($payload);
 
-        if ($last) {
-            if ($isCash) {
-                $this->voidPaymentRow($last);
-            } else {
-                if ((int) ($last->KREDIT ?? 0) > 0) {
-                    sccttran::query()->where('urut', $last->urut)->update(['KREDIT' => 0]);
-                    $last->KREDIT = 0;
-                }
-
-                $restore ??= [
-                    'amount' => $amount,
-                    'reffbank' => trim((string) ($last->REFFBANK ?? '')) ?: MultiVa::paymentReffBank(MultiVa::OPEN),
-                    'installment' => (int) ($last->INSTALLMENT ?? 0),
-                ];
-                $this->restoreMultiVaSaldo($tagihan, $restore);
-                $this->markRowReversed($last);
+        if ($isCashOrSaldo) {
+            $this->deleteManualPaymentRows($tagihan, $last);
+            $this->deleteLeftoverJurnalRows($tagihan, $last);
+        } elseif ($last) {
+            if ((int) ($last->KREDIT ?? 0) > 0) {
+                sccttran::query()->where('urut', $last->urut)->update(['KREDIT' => 0]);
+                $last->KREDIT = 0;
             }
+
+            $restore ??= [
+                'amount' => $amount,
+                'reffbank' => trim((string) ($last->REFFBANK ?? '')) ?: MultiVa::paymentReffBank(MultiVa::OPEN),
+                'installment' => (int) ($last->INSTALLMENT ?? 0),
+            ];
+            $this->restoreMultiVaSaldo($tagihan, $restore);
+            $this->markRowReversed($last);
         }
 
         Log::info('tagihan-payment.cancel.php_manual', [
             'aa' => $tagihan->AA,
             'amount' => $amount,
             'billpaid' => $billPaid,
-            'cash' => $isCash,
+            'cash_or_saldo' => $isCashOrSaldo,
             'tran_urut' => $last->urut ?? null,
+        ]);
+    }
+
+    private function leftoverCashSaldoQuery(scctbill $tagihan)
+    {
+        return sccttran::query()
+            ->where('BILLID', $tagihan->AA)
+            ->where('CUSTID', $tagihan->CUSTID)
+            ->where(function ($q) {
+                $q->whereRaw('UPPER(TRIM(COALESCE(METODE, ""))) IN (?, ?)', ['FROM TELLER', 'CASH'])
+                    ->orWhere('FIDBANK', self::SALDO_FIDBANK)
+                    ->orWhereRaw("TRIM(COALESCE(CAST(FIDBANK AS CHAR), '')) = ?", [self::CASH_FIDBANK]);
+            })
+            ->where(function ($q) {
+                $q->where('DEBET', '>', 0)
+                    ->orWhere('KREDIT', '>', 0);
+            });
+    }
+
+    private function lastLeftoverCashSaldoRow(scctbill $tagihan): ?sccttran
+    {
+        return $this->leftoverCashSaldoQuery($tagihan)
+            ->orderByDesc('INSTALLMENT')
+            ->orderByDesc('urut')
+            ->first();
+    }
+
+    private function deleteManualPaymentRows(scctbill $tagihan, ?sccttran $last): void
+    {
+        $query = sccttran::query()
+            ->where('BILLID', $tagihan->AA)
+            ->where('CUSTID', $tagihan->CUSTID)
+            ->where(function ($q) {
+                $q->whereRaw('UPPER(TRIM(COALESCE(METODE, ""))) IN (?, ?)', ['FROM TELLER', 'CASH'])
+                    ->orWhere('FIDBANK', self::SALDO_FIDBANK)
+                    ->orWhereRaw("TRIM(COALESCE(CAST(FIDBANK AS CHAR), '')) = ?", [self::CASH_FIDBANK]);
+            });
+
+        if ($last && $last->INSTALLMENT !== null && $last->INSTALLMENT !== '') {
+            $query->where('INSTALLMENT', $last->INSTALLMENT);
+        }
+
+        $deleted = $query->delete();
+
+        Log::info('tagihan-payment.cancel.deleted_manual_tran', [
+            'aa' => $tagihan->AA,
+            'installment' => $last->INSTALLMENT ?? null,
+            'deleted' => $deleted,
+        ]);
+    }
+
+    private function deleteLeftoverJurnalRows(scctbill $tagihan, ?sccttran $last): void
+    {
+        $query = sccttran::query()
+            ->where('BILLID', $tagihan->AA)
+            ->where('CUSTID', $tagihan->CUSTID)
+            ->where(function ($q) {
+                $q->whereRaw('UPPER(TRIM(COALESCE(METODE, ""))) IN (?, ?, ?)', [
+                    'JURNAL SALDO',
+                    'REVERSAL',
+                    'JURNAL REVERSAL',
+                ])
+                    ->orWhereRaw("UPPER(TRIM(COALESCE(NOREFF, ''))) = ?", ['REVERSAL']);
+            });
+
+        if ($last && $last->INSTALLMENT !== null && $last->INSTALLMENT !== '') {
+            $query->where(function ($q) use ($last) {
+                $q->where('INSTALLMENT', $last->INSTALLMENT)
+                    ->orWhereNull('INSTALLMENT');
+            });
+        }
+
+        $deleted = $query->delete();
+
+        Log::info('tagihan-payment.cancel.deleted_jurnal', [
+            'aa' => $tagihan->AA,
+            'installment' => $last->INSTALLMENT ?? null,
+            'deleted' => $deleted,
         ]);
     }
 

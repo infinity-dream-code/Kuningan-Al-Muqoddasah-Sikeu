@@ -83,17 +83,7 @@ class SccttranController extends Controller
             ->orderByRaw("CASE WHEN jenjang REGEXP '^[0-9]+$' THEN 0 ELSE 1 END, jenjang")
             ->orderByRaw("CASE WHEN kelas REGEXP '^[0-9]+$' THEN 0 ELSE 1 END, kelas")
             ->get();
-        $data['metodeOptions'] = sccttran::query()
-            ->select('METODE')
-            ->whereNotNull('METODE')
-            ->whereRaw("TRIM(COALESCE(METODE, '')) != ''")
-            ->distinct()
-            ->orderBy('METODE')
-            ->pluck('METODE')
-            ->map(fn ($m) => trim((string) $m))
-            ->filter()
-            ->unique()
-            ->values();
+        $data['metodeOptions'] = collect(['TOP UP', 'FROM INVOICE']);
         return view('admin.keuangan.saldo.sccttran.index', $data);
     }
 
@@ -273,13 +263,15 @@ class SccttranController extends Controller
             'sccttran.TRANSNO',
         ];
 
-        $query = sccttran::query()
-            ->leftJoin('scctcust', 'scctcust.CUSTID', 'sccttran.CUSTID');
+        $query = $this->topUpVaScope(
+            sccttran::query()->leftJoin('scctcust', 'scctcust.CUSTID', 'sccttran.CUSTID'),
+            'sccttran.',
+            $jenis
+        );
 
-        if ($metodeFilter) {
+        $allowedMetode = ['TOP UP', 'FROM INVOICE'];
+        if ($metodeFilter && in_array(strtoupper($metodeFilter), $allowedMetode, true)) {
             $query->whereRaw("UPPER(TRIM(COALESCE(sccttran.METODE, ''))) = ?", [strtoupper($metodeFilter)]);
-        } elseif ($jenis) {
-            $query = $this->topUpVaScope($query, 'sccttran.', $jenis);
         }
 
         SchoolScope::applyGender($query, 'scctcust.CODE04');
@@ -307,7 +299,10 @@ class SccttranController extends Controller
             }
         });
 
-        $totalBase = sccttran::query()->leftJoin('scctcust', 'scctcust.CUSTID', 'sccttran.CUSTID');
+        $totalBase = $this->topUpVaScope(
+            sccttran::query()->leftJoin('scctcust', 'scctcust.CUSTID', 'sccttran.CUSTID'),
+            'sccttran.'
+        );
         SchoolScope::applyGender($totalBase, 'scctcust.CODE04');
         $totalRecords = $totalBase->count();
         $totalRecordswithFilter = (clone $query)->count();

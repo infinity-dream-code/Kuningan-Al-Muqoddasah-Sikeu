@@ -179,17 +179,12 @@ class SaldoVirtualAccountController extends Controller
         return $query->where($num2ndCol, $siswa->NUM2ND ?? '');
     }
 
-    /** Transaksi saldo siswa langsung dari sccttran (bukan view). */
+    /** Semua transaksi sccttran siswa — tanpa view, tanpa filter FIDBANK. */
     protected function siswaTransQuery(scctcust $siswa)
     {
         return DB::connection('DATA_MYSQL')
             ->table('sccttran as trx')
-            ->where('trx.CUSTID', $siswa->CUSTID)
-            ->where(function ($q) {
-                $q->whereNull('trx.FIDBANK')
-                    ->orWhereRaw("TRIM(COALESCE(CAST(trx.FIDBANK AS CHAR), '')) = ''")
-                    ->orWhereRaw("TRIM(COALESCE(CAST(trx.FIDBANK AS CHAR), '')) != ?", ['1140000']);
-            });
+            ->where('trx.CUSTID', $siswa->CUSTID);
     }
 
     protected function formatNova(mixed $nis): string
@@ -252,7 +247,7 @@ class SaldoVirtualAccountController extends Controller
                 $trxQuery = $this->siswaTransQuery($data['siswa']);
                 $data['totalKredit'] = (int) (clone $trxQuery)->sum('trx.KREDIT');
                 $data['totalDebet'] = (int) (clone $trxQuery)->sum('trx.DEBET');
-                $data['saldo'] = MultiVa::custSaldo($data['siswa']->CUSTID, $this->reffBank);
+                $data['saldo'] = $data['totalKredit'] - $data['totalDebet'];
 //                $data['siswa']-> = $NOVA;
             } else {
                 throw new Exception('Siswa tidak ditemukan');
