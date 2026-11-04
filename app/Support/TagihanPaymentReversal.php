@@ -281,6 +281,7 @@ class TagihanPaymentReversal
     {
         $last ??= $this->lastLeftoverCashSaldoRow($tagihan);
         $isCashOrSaldo = $this->isManualCashOrSaldo($tagihan, $last);
+        $isCash = $this->isCashPayment($tagihan, $last);
 
         $amount = (int) ($last->DEBET ?? 0);
         if ($amount <= 0) {
@@ -310,9 +311,12 @@ class TagihanPaymentReversal
 
         $tagihan->update($payload);
 
-        if ($isCashOrSaldo) {
-            $this->deleteManualPaymentRows($tagihan, $last);
-            $this->deleteLeftoverJurnalRows($tagihan, $last);
+        if ($isCashOrSaldo && $last) {
+            if ($isCash) {
+                $this->reverseCashPaymentInTran($tagihan, $last, $amount);
+            } else {
+                $this->reverseSaldoPaymentInTran($tagihan, $last, $amount);
+            }
         } elseif ($last) {
             if ((int) ($last->KREDIT ?? 0) > 0) {
                 sccttran::query()->where('urut', $last->urut)->update(['KREDIT' => 0]);
@@ -332,9 +336,119 @@ class TagihanPaymentReversal
             'aa' => $tagihan->AA,
             'amount' => $amount,
             'billpaid' => $billPaid,
+            'cash' => $isCash,
             'cash_or_saldo' => $isCashOrSaldo,
             'tran_urut' => $last->urut ?? null,
         ]);
+    }
+
+    private function isCashPayment(scctbill $tagihan, ?sccttran $last): bool
+    {
+        if ($this->isCashMetode($last)) {
+            return true;
+        }
+
+        $fidBank = $this->normalizeFidBank($tagihan->FIDBANK ?? $last->FIDBANK ?? '');
+
+        if ($fidBank === self::SALDO_FIDBANK) {
+            return false;
+        }
+
+        // Helpdesk/manual saldo: FROM TELLER DEBET saja (KREDIT=0).
+        if ($this->isSaldoMetode($last) && (int) ($last->KREDIT ?? 0) <= 0) {
+            return false;
+        }
+
+        // Cash / teller lama: FIDBANK teller, atau FROM TELLER yang punya KREDIT.
+        return $this->isCashFidBank($fidBank)
+            || ($this->isSaldoMetode($last) && (int) ($last->KREDIT ?? 0) > 0);
+    }
+
+    /** Cash: biarkan baris CASH (DEBET tetap), KREDIT=0 + isreversal, insert REVERSAL KREDIT. */
+    private function reverseCashPaymentInTran(scctbill $tagihan, sccttran $last, int $amount): void
+    {
+        $payload = ['KREDIT' => 0];
+
+        try {
+            sccttran::query()->where('urut', $last->urut)->update($payload + ['isreversal' => 1]);
+        } catch (Throwable $e) {
+            if (stripos($e->getMessage(), 'isreversal') === false
+                && stripos($e->getMessage(), 'Unknown column') === false) {
+                throw $e;
+            }
+
+            sccttran::query()->where('urut', $last->urut)->update($payload);
+            $this->markRowReversed($last);
+        }
+
+        if ($amount <= 0) {
+            return;
+        }
+
+        $this->insertAuditReversalRow($tagihan, $last, $amount, 'REVERSAL');
+    }
+
+    /** Saldo/helpdesk: baris FROM TELLER tetap, isreversal, insert JURNAL SALDO KREDIT. */
+    private function reverseSaldoPaymentInTran(scctbill $tagihan, sccttran $last, int $amount): void
+    {
+        $this->markRowReversed($last);
+
+        if ($amount <= 0) {
+            return;
+        }
+
+        $reffBank = trim((string) ($last->REFFBANK ?? ''));
+        if ($reffBank === '') {
+            $reffBank = MultiVa::paymentReffBank(MultiVa::OPEN);
+        }
+
+        $this->restoreMultiVaSaldo($tagihan, [
+            'amount' => $amount,
+            'reffbank' => $reffBank,
+            'installment' => (int) ($last->INSTALLMENT ?? 0),
+        ]);
+    }
+
+    private function insertAuditReversalRow(
+        scctbill $tagihan,
+        sccttran $last,
+        int $amount,
+        string $metode
+    ): void {
+        $nextUrut = ((int) sccttran::query()->max('urut')) + 1;
+        $reffBank = trim((string) ($last->REFFBANK ?? ''));
+        if ($reffBank === '') {
+            $reffBank = MultiVa::OPEN;
+        }
+
+        $payload = [
+            'urut' => $nextUrut,
+            'CUSTID' => $tagihan->CUSTID,
+            'METODE' => $metode,
+            'TRXDATE' => now(),
+            'NOREFF' => 'REVERSAL',
+            'FIDBANK' => (string) ($last->FIDBANK ?? $tagihan->FIDBANK ?? self::CASH_FIDBANK),
+            'DEBET' => 0,
+            'KREDIT' => $amount,
+            'REFFBANK' => $reffBank,
+            'BILLID' => $tagihan->AA,
+            'BILLTARGET' => $tagihan->BILLNM,
+            'INSTALLMENT' => $last->INSTALLMENT,
+            'TRANSNO' => $tagihan->TRANSNO ?? 'REVERSAL',
+            'isreversal' => 1,
+        ];
+
+        try {
+            sccttran::create($payload);
+        } catch (Throwable $e) {
+            if (stripos($e->getMessage(), 'isreversal') === false
+                && stripos($e->getMessage(), 'Unknown column') === false) {
+                throw $e;
+            }
+
+            unset($payload['isreversal']);
+            sccttran::create($payload);
+        }
     }
 
     private function leftoverCashSaldoQuery(scctbill $tagihan)
@@ -350,6 +464,11 @@ class TagihanPaymentReversal
             ->where(function ($q) {
                 $q->where('DEBET', '>', 0)
                     ->orWhere('KREDIT', '>', 0);
+            })
+            ->where(function ($q) {
+                $q->whereNull('isreversal')
+                    ->orWhere('isreversal', 0)
+                    ->orWhere('isreversal', '0');
             });
     }
 
@@ -359,79 +478,6 @@ class TagihanPaymentReversal
             ->orderByDesc('INSTALLMENT')
             ->orderByDesc('urut')
             ->first();
-    }
-
-    private function deleteManualPaymentRows(scctbill $tagihan, ?sccttran $last): void
-    {
-        $query = sccttran::query()
-            ->where('BILLID', $tagihan->AA)
-            ->where('CUSTID', $tagihan->CUSTID)
-            ->where(function ($q) {
-                $q->whereRaw('UPPER(TRIM(COALESCE(METODE, ""))) IN (?, ?)', ['FROM TELLER', 'CASH'])
-                    ->orWhere('FIDBANK', self::SALDO_FIDBANK)
-                    ->orWhereRaw("TRIM(COALESCE(CAST(FIDBANK AS CHAR), '')) = ?", [self::CASH_FIDBANK]);
-            });
-
-        if ($last && $last->INSTALLMENT !== null && $last->INSTALLMENT !== '') {
-            $query->where('INSTALLMENT', $last->INSTALLMENT);
-        }
-
-        $deleted = $query->delete();
-
-        Log::info('tagihan-payment.cancel.deleted_manual_tran', [
-            'aa' => $tagihan->AA,
-            'installment' => $last->INSTALLMENT ?? null,
-            'deleted' => $deleted,
-        ]);
-    }
-
-    private function deleteLeftoverJurnalRows(scctbill $tagihan, ?sccttran $last): void
-    {
-        $query = sccttran::query()
-            ->where('BILLID', $tagihan->AA)
-            ->where('CUSTID', $tagihan->CUSTID)
-            ->where(function ($q) {
-                $q->whereRaw('UPPER(TRIM(COALESCE(METODE, ""))) IN (?, ?, ?)', [
-                    'JURNAL SALDO',
-                    'REVERSAL',
-                    'JURNAL REVERSAL',
-                ])
-                    ->orWhereRaw("UPPER(TRIM(COALESCE(NOREFF, ''))) = ?", ['REVERSAL']);
-            });
-
-        if ($last && $last->INSTALLMENT !== null && $last->INSTALLMENT !== '') {
-            $query->where(function ($q) use ($last) {
-                $q->where('INSTALLMENT', $last->INSTALLMENT)
-                    ->orWhereNull('INSTALLMENT');
-            });
-        }
-
-        $deleted = $query->delete();
-
-        Log::info('tagihan-payment.cancel.deleted_jurnal', [
-            'aa' => $tagihan->AA,
-            'installment' => $last->INSTALLMENT ?? null,
-            'deleted' => $deleted,
-        ]);
-    }
-
-    private function voidPaymentRow(sccttran $last): void
-    {
-        $payload = [
-            'DEBET' => 0,
-            'KREDIT' => 0,
-        ];
-
-        try {
-            sccttran::query()->where('urut', $last->urut)->update($payload + ['isreversal' => 1]);
-        } catch (Throwable $e) {
-            if (stripos($e->getMessage(), 'isreversal') === false
-                && stripos($e->getMessage(), 'Unknown column') === false) {
-                throw $e;
-            }
-
-            sccttran::query()->where('urut', $last->urut)->update($payload);
-        }
     }
 
     private function markRowReversed(sccttran $last): void
