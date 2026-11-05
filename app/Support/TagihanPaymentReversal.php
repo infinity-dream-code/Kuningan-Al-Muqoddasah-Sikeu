@@ -122,7 +122,11 @@ class TagihanPaymentReversal
             ->where('CUSTID', $tagihan->CUSTID)
             ->where('DEBET', '>', 0)
             ->where(function ($q) {
-                $q->whereRaw('UPPER(TRIM(COALESCE(METODE, ""))) IN (?, ?)', ['FROM TELLER', 'CASH'])
+                $q->whereRaw('UPPER(TRIM(COALESCE(METODE, ""))) IN (?, ?, ?)', [
+                    'FROM TELLER',
+                    'CASH',
+                    'FROM INVOICE',
+                ])
                     ->orWhere('FIDBANK', self::SALDO_FIDBANK)
                     ->orWhereRaw("TRIM(COALESCE(CAST(FIDBANK AS CHAR), '')) = ?", [self::CASH_FIDBANK]);
             })
@@ -153,14 +157,15 @@ class TagihanPaymentReversal
             return null;
         }
 
-        $fidBank = $this->normalizeFidBank($tagihan->FIDBANK ?? $last->FIDBANK ?? '');
-        if ($this->isCashFidBank($fidBank) || $this->isCashMetode($last)) {
+        // Cash tidak mengurangi saldo VA — tidak perlu restore KREDIT.
+        if ($this->isCashPayment($tagihan, $last)) {
             return null;
         }
 
         $amount = (int) ($last->DEBET ?? 0);
         $reffBank = trim((string) ($last->REFFBANK ?? ''));
         if ($reffBank === '') {
+            // Open-only: samakan dengan baris bayar / fallbackSaldo (bukan wajib kolom VA).
             $reffBank = MultiVa::paymentReffBank(MultiVa::OPEN);
         }
 
@@ -188,7 +193,11 @@ class TagihanPaymentReversal
             ->where('CUSTID', $tagihan->CUSTID)
             ->where('INSTALLMENT', $lastInstallment)
             ->where(function ($q) {
-                $q->whereRaw('UPPER(TRIM(COALESCE(METODE, ""))) IN (?, ?)', ['FROM TELLER', 'CASH'])
+                $q->whereRaw('UPPER(TRIM(COALESCE(METODE, ""))) IN (?, ?, ?)', [
+                    'FROM TELLER',
+                    'CASH',
+                    'FROM INVOICE',
+                ])
                     ->orWhere('FIDBANK', self::SALDO_FIDBANK)
                     ->orWhereRaw("TRIM(COALESCE(CAST(FIDBANK AS CHAR), '')) = ?", [self::CASH_FIDBANK]);
             })
@@ -205,6 +214,19 @@ class TagihanPaymentReversal
         $hostname = Str::limit((string) ($request->ip() ?? ''), 250, '');
         $reffBank = $restore['reffbank'] ?? MultiVa::OPEN;
 
+        // Open-only / tanpa kolom VA: procedure MultiVA sering SELECT scctbill.VA → 1054.
+        // Langsung PHP supaya pembatalan tidak gagal.
+        if (!MultiVa::closeEnabled() || MultiVa::billVaColumn() === null) {
+            Log::info('tagihan-payment.cancel.skip_procedure_no_va', [
+                'aa' => $aa,
+                'close_enabled' => MultiVa::closeEnabled(),
+                'bill_va_column' => MultiVa::billVaColumn(),
+            ]);
+            $this->fallbackReverseInPhp($tagihan, $restore);
+
+            return;
+        }
+
         $candidates = array_values(array_unique(array_filter([
             MultiVa::cancelProcedure($reffBank),
             MultiVa::cancelProcedureUnsuffixed(),
@@ -218,18 +240,33 @@ class TagihanPaymentReversal
 
                 return;
             } catch (Throwable $e) {
-                if (!$this->isMissingRoutine($e, $procedureName)) {
+                if (!$this->isMissingRoutine($e, $procedureName) && !$this->isMissingVaColumn($e)) {
                     throw $e;
                 }
 
                 Log::info('tagihan-payment.cancel.fallback_legacy', [
                     'missing' => $procedureName,
                     'aa' => $aa,
+                    'error' => $e->getMessage(),
                 ]);
             }
         }
 
         $this->fallbackReverseInPhp($tagihan, $restore);
+    }
+
+    private function isMissingVaColumn(Throwable $e): bool
+    {
+        $message = $e->getMessage();
+
+        return stripos($message, 'Unknown column') !== false
+            && (
+                stripos($message, "'VA'") !== false
+                || stripos($message, '"VA"') !== false
+                || stripos($message, ' scctbill.VA') !== false
+                || stripos($message, ' mst_tagihan.VA') !== false
+                || preg_match("/\\bcolumn ['`]?va['`]?/i", $message)
+            );
     }
 
     private function fallbackReverseInPhp(scctbill $tagihan, ?array $restore): void
@@ -309,7 +346,9 @@ class TagihanPaymentReversal
             $payload['NOREFF'] = null;
         }
 
-        $tagihan->update($payload);
+        // Jangan ikut menulis kolom VA jika DB client tidak punya.
+        unset($tagihan->va, $tagihan->VA);
+        $tagihan->update(MultiVa::sanitizeBillPayload($payload));
 
         if ($isCashOrSaldo && $last) {
             if ($isCash) {
