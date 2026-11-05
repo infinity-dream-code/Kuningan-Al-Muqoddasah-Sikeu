@@ -166,7 +166,7 @@ class TagihanPaymentReversal
         $reffBank = trim((string) ($last->REFFBANK ?? ''));
         if ($reffBank === '') {
             // Open-only: samakan dengan baris bayar / fallbackSaldo (bukan wajib kolom VA).
-            $reffBank = MultiVa::paymentReffBank(MultiVa::OPEN);
+            $reffBank = MultiVa::tranReffBank();
         }
 
         if ($amount <= 0) {
@@ -364,7 +364,7 @@ class TagihanPaymentReversal
 
             $restore ??= [
                 'amount' => $amount,
-                'reffbank' => trim((string) ($last->REFFBANK ?? '')) ?: MultiVa::paymentReffBank(MultiVa::OPEN),
+                'reffbank' => trim((string) ($last->REFFBANK ?? '')) ?: MultiVa::tranReffBank(),
                 'installment' => (int) ($last->INSTALLMENT ?? 0),
             ];
             $this->restoreMultiVaSaldo($tagihan, $restore);
@@ -438,7 +438,7 @@ class TagihanPaymentReversal
 
         $reffBank = trim((string) ($last->REFFBANK ?? ''));
         if ($reffBank === '') {
-            $reffBank = MultiVa::paymentReffBank(MultiVa::OPEN);
+            $reffBank = MultiVa::tranReffBank();
         }
 
         $this->restoreMultiVaSaldo($tagihan, [
@@ -457,7 +457,7 @@ class TagihanPaymentReversal
         $nextUrut = ((int) sccttran::query()->max('urut')) + 1;
         $reffBank = trim((string) ($last->REFFBANK ?? ''));
         if ($reffBank === '') {
-            $reffBank = MultiVa::OPEN;
+            $reffBank = MultiVa::tranReffBank();
         }
 
         $payload = [

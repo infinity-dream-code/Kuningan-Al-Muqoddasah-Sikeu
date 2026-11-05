@@ -451,6 +451,17 @@ class MultiVa
         return self::paymentSuffix($reffBank);
     }
 
+    /**
+     * REFFBANK yang ditulis ke sccttran untuk transaksi sekolah (TOP UP / manual cash / manual saldo).
+     * Bukan suffix function 1/2 — di Al Muqoddasah nilai tran = 23.
+     */
+    public static function tranReffBank(): string
+    {
+        $raw = trim((string) config('app.tran_reffbank', '23'));
+
+        return $raw !== '' ? $raw : '23';
+    }
+
     public static function paymentFunction(string $reffBank): string
     {
         return 'BuilderPaymentBill_MultiVAPerTagihan' . self::paymentSuffix($reffBank);

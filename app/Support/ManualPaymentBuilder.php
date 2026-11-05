@@ -31,6 +31,7 @@ class ManualPaymentBuilder
             if ($fidBank === self::SALDO_FIDBANK) {
                 $va = MultiVa::resolveFromBill($tagihan) ?? MultiVa::OPEN;
                 $this->callBuilderPaymentBill($aa, $nominal, $va);
+                $this->normalizePaymentReffBank($tagihan);
 
                 return;
             }
@@ -44,6 +45,7 @@ class ManualPaymentBuilder
                 $aa,
                 $nominal
             );
+            $this->normalizePaymentReffBank($tagihan);
         } catch (\Throwable $e) {
             // Insufficient_Balance dari function (REFFBANK 1/2 kosong) → coba PHP pakai saldo view.
             $saldoInsufficient = $e instanceof RuntimeException
@@ -182,7 +184,7 @@ class ManualPaymentBuilder
             'KDCHANNEL' => '11',
             'DEBET' => $nominal,
             'KREDIT' => $nominal,
-            'REFFBANK' => MultiVa::OPEN,
+            'REFFBANK' => MultiVa::tranReffBank(),
             'TRANSNO' => $transno ?: (string) (Auth::user()->users ?? 'TELLER'),
             'BILLID' => (string) $tagihan->AA,
             'BILLTARGET' => (string) ($tagihan->BILLNM ?? ''),
@@ -226,8 +228,8 @@ class ManualPaymentBuilder
             'KDCHANNEL' => '',
             'DEBET' => $nominal,
             'KREDIT' => 0,
-            // Samakan dengan function PerTagihan1 (REFFBANK='1')
-            'REFFBANK' => MultiVa::paymentReffBank(MultiVa::OPEN),
+            // Samakan dengan TOP UP / tran sekolah (REFFBANK=23), bukan suffix function 1/2.
+            'REFFBANK' => MultiVa::tranReffBank(),
             'TRANSNO' => $transno ?: (string) (Auth::user()->users ?? 'TELLER'),
             'BILLID' => (string) $tagihan->AA,
             'BILLTARGET' => (string) ($tagihan->BILLNM ?? ''),
@@ -319,6 +321,43 @@ class ManualPaymentBuilder
             '' => 'Pembayaran gagal diproses oleh sistem (tidak ada respons dari database).',
             default => "Pembayaran gagal diproses oleh sistem ({$result}).",
         };
+    }
+
+    /** Function DB sering isi REFFBANK 101/1 — samakan ke tran sekolah (23). */
+    private function normalizePaymentReffBank(scctbill $tagihan): void
+    {
+        $target = MultiVa::tranReffBank();
+
+        $row = DB::connection('DATA_MYSQL')->table('sccttran')
+            ->where('BILLID', $tagihan->AA)
+            ->where('CUSTID', $tagihan->CUSTID)
+            ->where('DEBET', '>', 0)
+            ->where(function ($q) {
+                $q->whereRaw('UPPER(TRIM(COALESCE(METODE, ""))) IN (?, ?)', ['CASH', 'FROM TELLER'])
+                    ->orWhere('FIDBANK', self::SALDO_FIDBANK)
+                    ->orWhereRaw("TRIM(COALESCE(CAST(FIDBANK AS CHAR), '')) = ?", ['1140000']);
+            })
+            ->orderByDesc('urut')
+            ->first(['urut', 'REFFBANK']);
+
+        if (!$row) {
+            return;
+        }
+
+        if (trim((string) ($row->REFFBANK ?? '')) === $target) {
+            return;
+        }
+
+        DB::connection('DATA_MYSQL')->table('sccttran')
+            ->where('urut', $row->urut)
+            ->update(['REFFBANK' => $target]);
+
+        Log::info('manual-payment.builder.reffbank_normalized', [
+            'aa' => $tagihan->AA,
+            'urut' => $row->urut,
+            'from' => $row->REFFBANK,
+            'reffbank' => $target,
+        ]);
     }
 
     private function formatPaymentDate(string $paidAt): string

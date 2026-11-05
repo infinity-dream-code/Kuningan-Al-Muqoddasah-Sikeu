@@ -138,7 +138,7 @@ class DebetSaldoController extends Controller
                     'KREDIT' => 0,
                     'METODE' => self::METODE,
                     'FIDBANK' => self::FIDBANK,
-                    'REFFBANK' => MultiVa::OPEN,
+                    'REFFBANK' => MultiVa::tranReffBank(),
                     'KDCHANNEL' => self::KDCHANNEL,
                     'NOREFF' => $transNo,
                     'TRANSNO' => $transNo,
